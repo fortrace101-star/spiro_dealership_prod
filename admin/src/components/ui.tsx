@@ -13,13 +13,37 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   )
 }
 
-export function KpiCard({ label, value, delta, accent }: { label: string; value: string; delta?: string; accent?: boolean }) {
+export function KpiCard({
+  label,
+  value,
+  delta,
+  accent,
+  onClick,
+}: {
+  label: string
+  value: string
+  delta?: string
+  accent?: boolean
+  onClick?: () => void
+}) {
+  const interactive = !!onClick
   return (
-    <div className={cn('card p-5', accent && 'bg-gradient-to-br from-brand-500/15 to-transparent border-brand-500/30')}>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!interactive}
+      aria-label={interactive ? `${label} — view details` : undefined}
+      className={cn(
+        'card p-5 text-left transition',
+        accent && 'bg-gradient-to-br from-brand-500/15 to-transparent border-brand-500/30',
+        interactive && 'cursor-pointer hover:border-brand-500/50 hover:bg-[#161b24] focus:outline-none focus:ring-1 focus:ring-brand-500/50',
+      )}
+    >
       <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">{label}</div>
       <div className={cn('mt-2 text-2xl font-bold text-white', accent && 'text-brand-300')}>{value}</div>
       {delta && <div className="mt-1 text-xs text-slate-500">{delta}</div>}
-    </div>
+      {interactive && <div className="mt-2 text-[11px] text-brand-300/80">Click for details →</div>}
+    </button>
   )
 }
 

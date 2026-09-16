@@ -4,11 +4,19 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import { api } from '../lib/api'
-import { compactUgx, num, PAYMENT_LABELS, ugx } from '../lib/format'
-import type { HourlyPoint, Product, TodayReport } from '../lib/types'
+import { compactUgx, dateTime, num, PAYMENT_LABELS, timeAgo, ugx } from '../lib/format'
+import type { Approval, HourlyPoint, Product, Sale, TodayReport } from '../lib/types'
+import { cn } from '../lib/cn'
 import { Badge, EmptyState, KpiCard, PageHeader, Spinner } from '../components/ui'
+import { Modal } from '../components/Modal'
 
 const PIE_COLORS = ['#12b76a', '#0ea5e9', '#8b5cf6', '#f59e0b', '#ef4444']
+
+type CardDetail =
+  | { kind: 'loading' }
+  | { kind: 'sales'; title: string; subtitle: string; sales: Sale[]; showStatus?: boolean }
+  | { kind: 'lowstock'; products: Product[] }
+  | { kind: 'approvals'; approvals: Approval[] }
 
 export default function OverviewPage() {
   const [today, setToday] = useState<TodayReport | null>(null)
@@ -16,6 +24,7 @@ export default function OverviewPage() {
   const [top, setTop] = useState<{ name: string; qty: number; revenue: number; profit: number }[]>([])
   const [low, setLow] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
+  const [detail, setDetail] = useState<CardDetail | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -40,6 +49,62 @@ export default function OverviewPage() {
     return () => clearInterval(iv)
   }, [load])
 
+  // ---- Card drill-down loaders ----
+  async function openSales(opts: { days?: number; payment?: string; title: string; subtitle: string; filter?: (s: Sale) => boolean; showStatus?: boolean }) {
+    setDetail({ kind: 'loading' })
+    const params = new URLSearchParams()
+    if (opts.days !== undefined) params.set('days', String(opts.days))
+    if (opts.payment) params.set('payment', opts.payment)
+    try {
+      const r = await api.sales(params.toString())
+      const sales = opts.filter ? r.sales.filter(opts.filter) : r.sales
+      setDetail({ kind: 'sales', title: opts.title, subtitle: opts.subtitle, sales, showStatus: opts.showStatus })
+    } catch {
+      setDetail(null)
+    }
+  }
+
+  const openRevenue = () =>
+    openSales({ days: 1, title: 'Revenue details', subtitle: 'All transactions recorded today' })
+  const openProfit = () =>
+    openSales({ days: 1, title: 'Gross profit details', subtitle: 'Profit per transaction (selling price − cost)' })
+  const openBikes = () =>
+    openSales({ days: 1, title: 'Bikes sold today', subtitle: 'Transactions that included a bike (matched by VIN)' })
+  const openAvg = () =>
+    openSales({ days: 1, title: 'Transaction size breakdown', subtitle: 'Every sale today, largest first' })
+
+  async function openLowStock() {
+    setDetail({ kind: 'loading' })
+    try {
+      const r = await api.lowStock()
+      setDetail({ kind: 'lowstock', products: r.products })
+    } catch {
+      setDetail(null)
+    }
+  }
+
+  async function openApprovals() {
+    setDetail({ kind: 'loading' })
+    try {
+      const r = await api.approvals('pending')
+      setDetail({ kind: 'approvals', approvals: r.approvals })
+    } catch {
+      setDetail(null)
+    }
+  }
+
+  const openSync = () =>
+    openSales({
+      days: 2,
+      title: 'Awaiting sync (POS)',
+      subtitle: 'Offline POS sales not yet confirmed by the server',
+      filter: (s) => s.status !== 'completed',
+      showStatus: true,
+    })
+
+  const openCredit = () =>
+    openSales({ days: 90, payment: 'credit', title: 'Credit sales outstanding', subtitle: 'Credit sales from the last 90 days' })
+
   if (loading) return <Spinner />
   if (!today) return <EmptyState message="Could not load today's report." />
 
@@ -47,6 +112,7 @@ export default function OverviewPage() {
   const donut = today.payments.map((p) => ({ name: PAYMENT_LABELS[p.payment_method] || p.payment_method, value: Number(p.amount) }))
   const partsRev = Number(today.items.find((i) => i.kind === 'part')?.amount || 0)
   const bikesRev = Number(today.items.find((i) => i.kind === 'bike')?.amount || 0)
+  const margin = t.revenue ? ((t.profit / t.revenue) * 100).toFixed(1) : '0.0'
 
   return (
     <div>
@@ -57,10 +123,26 @@ export default function OverviewPage() {
 
       {/* KPI row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard label="Revenue" value={ugx(t.revenue)} accent delta={`${t.sales_count} transactions`} />
-        <KpiCard label="Gross Profit" value={ugx(t.profit)} delta={t.revenue ? `Margin ${((t.profit / t.revenue) * 100).toFixed(1)}%` : undefined} />
-        <KpiCard label="Bikes Sold" value={num(t.bikes_sold)} delta={`${ugx(bikesRev)} bikes · ${ugx(partsRev)} parts`} />
-        <KpiCard label="Avg Transaction" value={ugx(t.avg_transaction)} delta={`${ugx(t.discounts)} discounts given`} />
+        <KpiCard
+          label="Revenue"
+          value={ugx(t.revenue)}
+          accent
+          delta={`${t.sales_count} transactions`}
+          onClick={openRevenue}
+        />
+        <KpiCard label="Gross Profit" value={ugx(t.profit)} delta={`Margin ${margin}%`} onClick={openProfit} />
+        <KpiCard
+          label="Bikes Sold"
+          value={num(t.bikes_sold)}
+          delta={`${ugx(bikesRev)} bikes · ${ugx(partsRev)} parts`}
+          onClick={openBikes}
+        />
+        <KpiCard
+          label="Avg Transaction"
+          value={ugx(t.avg_transaction)}
+          delta={`${ugx(t.discounts)} discounts given`}
+          onClick={openAvg}
+        />
       </div>
 
       {/* Chart + donut */}
@@ -137,10 +219,10 @@ export default function OverviewPage() {
 
       {/* Alerts strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
-        <AlertCard label="Low stock alerts" value={t.low_stock_count} tone="amber" />
-        <AlertCard label="Pending approvals" value={t.pending_approvals} tone="sky" />
-        <AlertCard label="Awaiting sync (POS)" value={t.pending_sync} tone="violet" />
-        <AlertCard label="Credit outstanding" value={ugx(t.credit_outstanding)} tone="red" isText />
+        <AlertCard label="Low stock alerts" value={t.low_stock_count} tone="amber" onClick={openLowStock} />
+        <AlertCard label="Pending approvals" value={t.pending_approvals} tone="sky" onClick={openApprovals} />
+        <AlertCard label="Awaiting sync (POS)" value={t.pending_sync} tone="violet" onClick={openSync} />
+        <AlertCard label="Credit outstanding" value={ugx(t.credit_outstanding)} tone="red" isText onClick={openCredit} />
       </div>
 
       {/* Top products + low stock */}
@@ -197,11 +279,141 @@ export default function OverviewPage() {
           )}
         </div>
       </div>
+
+      {/* ---- Card detail modals ---- */}
+      {detail?.kind === 'loading' && (
+        <Modal title="Loading details…" onClose={() => setDetail(null)}>
+          <Spinner />
+        </Modal>
+      )}
+
+      {detail?.kind === 'sales' && (
+        <Modal title={detail.title} onClose={() => setDetail(null)} wide>
+          <p className="text-xs text-slate-500 -mt-2 mb-3">{detail.subtitle} · {detail.sales.length} found</p>
+          <SalesTable sales={detail.sales} showStatus={detail.showStatus} />
+        </Modal>
+      )}
+
+      {detail?.kind === 'lowstock' && (
+        <Modal title="Low stock products" onClose={() => setDetail(null)} wide>
+          {detail.products.length === 0 ? (
+            <EmptyState message="All stock levels healthy 🎉" />
+          ) : (
+            <table className="w-full">
+              <thead>
+                <tr>
+                  <th className="th">Product</th>
+                  <th className="th text-right">In stock</th>
+                  <th className="th text-right">Min</th>
+                  <th className="th text-right">Reorder at</th>
+                  <th className="th text-right">Stock value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.products.map((p) => (
+                  <tr key={p.id}>
+                    <td className="td">
+                      <div className="font-medium text-white">{p.name}</div>
+                      <div className="text-xs text-slate-500">{p.sku} · {p.category}</div>
+                    </td>
+                    <td className="td text-right">
+                      <Badge kind={p.stock_qty === 0 ? 'credit' : 'pending'}>{p.stock_qty} left</Badge>
+                    </td>
+                    <td className="td text-right text-slate-400">{p.min_stock}</td>
+                    <td className="td text-right text-slate-400">{p.reorder_level}</td>
+                    <td className="td text-right">{ugx(p.stock_value ?? Number(p.cost_price) * p.stock_qty)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Modal>
+      )}
+
+      {detail?.kind === 'approvals' && (
+        <Modal title="Pending approvals" onClose={() => setDetail(null)} wide>
+          {detail.approvals.length === 0 ? (
+            <EmptyState message="Nothing waiting for approval 🎉" />
+          ) : (
+            <div className="space-y-3">
+              {detail.approvals.map((a) => (
+                <div key={a.id} className="rounded-xl border border-slate-800/70 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <Badge kind={a.type}>{a.type.replace('_', ' ')}</Badge>
+                      <span className="text-sm text-slate-300">{a.requested_by_name || 'Unknown'}</span>
+                    </div>
+                    <span className="text-xs text-slate-500">{timeAgo(a.created_at)}</span>
+                  </div>
+                  {approvalAmount(a.payload) && (
+                    <div className="mt-2 text-sm font-semibold text-white">{approvalAmount(a.payload)}</div>
+                  )}
+                </div>
+              ))}
+              <p className="text-xs text-slate-500">Review and decide these in the Approvals page.</p>
+            </div>
+          )}
+        </Modal>
+      )}
     </div>
   )
 }
 
-function AlertCard({ label, value, tone, isText }: { label: string; value: number | string; tone: 'amber' | 'sky' | 'violet' | 'red'; isText?: boolean }) {
+function SalesTable({ sales, showStatus }: { sales: Sale[]; showStatus?: boolean }) {
+  if (sales.length === 0) return <EmptyState message="Nothing to show for this period." />
+  return (
+    <>
+      <table className="w-full">
+        <thead>
+          <tr>
+            <th className="th">Receipt</th>
+            <th className="th">When</th>
+            <th className="th">Customer</th>
+            {showStatus ? <th className="th">Status</th> : <th className="th">Method</th>}
+            <th className="th text-right">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sales.slice(0, 50).map((s) => (
+            <tr key={s.id}>
+              <td className="td font-medium text-white">{s.receipt_no}</td>
+              <td className="td text-slate-400">{dateTime(s.created_at)}</td>
+              <td className="td">{s.customer_name || '—'}</td>
+              {showStatus ? (
+                <td className="td"><Badge kind={s.status}>{s.status}</Badge></td>
+              ) : (
+                <td className="td"><Badge kind={s.payment_method}>{PAYMENT_LABELS[s.payment_method] || s.payment_method}</Badge></td>
+              )}
+              <td className="td text-right font-semibold">{ugx(s.total)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {sales.length > 50 && <p className="text-xs text-slate-500 mt-2">Showing first 50 of {sales.length}</p>}
+    </>
+  )
+}
+
+function approvalAmount(payload: Record<string, unknown>): string | null {
+  const cand = payload.amount ?? payload.total ?? payload.value ?? payload.discount
+  if (cand === undefined || cand === null) return null
+  const n = Number(cand)
+  return Number.isNaN(n) ? null : ugx(n)
+}
+
+function AlertCard({
+  label,
+  value,
+  tone,
+  isText,
+  onClick,
+}: {
+  label: string
+  value: number | string
+  tone: 'amber' | 'sky' | 'violet' | 'red'
+  isText?: boolean
+  onClick?: () => void
+}) {
   const tones = {
     amber: 'text-amber-300 bg-amber-500/10 border-amber-500/20',
     sky: 'text-sky-300 bg-sky-500/10 border-sky-500/20',
@@ -209,9 +421,22 @@ function AlertCard({ label, value, tone, isText }: { label: string; value: numbe
     red: 'text-red-300 bg-red-500/10 border-red-500/20',
   }
   return (
-    <div className={`rounded-2xl border p-4 ${tones[tone]}`}>
-      <div className="text-[11px] uppercase tracking-wider font-semibold opacity-80">{label}</div>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      aria-label={onClick ? `${label} — view details` : undefined}
+      className={cn(
+        'rounded-2xl border p-4 text-left transition',
+        tones[tone],
+        onClick && 'cursor-pointer hover:brightness-125 focus:outline-none focus:ring-1 focus:ring-white/30',
+      )}
+    >
+      <div className="text-[11px] uppercase tracking-wider font-semibold opacity-80 flex items-center justify-between gap-2">
+        {label}
+        {onClick && <span aria-hidden>→</span>}
+      </div>
       <div className="mt-1 text-xl font-bold">{isText ? value : num(value as number)}</div>
-    </div>
+    </button>
   )
 }

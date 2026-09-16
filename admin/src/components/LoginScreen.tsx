@@ -13,8 +13,9 @@ export default function LoginScreen() {
   const [busy, setBusy] = useState(false)
   const [signedIn, setSignedIn] = useState(false)
 
-  // Already signed in? Skip the form.
-  if ((user && !busy) || signedIn) return <Navigate to={from} replace />
+  // Already signed in? Skip the form. (signedIn is excluded so the success
+  // message stays visible during the short delay before navigate() runs.)
+  if (user && !busy) return <Navigate to={from} replace />
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -23,7 +24,8 @@ export default function LoginScreen() {
     try {
       await login(email, password)
       setSignedIn(true)
-      navigate(from, { replace: true })
+      // Brief pause so the success message is visible before the redirect.
+      setTimeout(() => navigate(from, { replace: true }), 600)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')
       setBusy(false)
@@ -67,7 +69,7 @@ export default function LoginScreen() {
           {error && <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{error}</p>}
 
           <button className="btn-primary w-full" disabled={busy}>
-            {busy ? 'Signing in…' : 'Sign in'}
+            {signedIn ? 'Signed in ✓' : busy ? 'Signing in…' : 'Sign in'}
           </button>
 
           {signedIn && (
