@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-ssr/
+dev-dist/
+.env
+*.local
+npm_install.log
+*.err
+tsc*.log
+.DS_Store

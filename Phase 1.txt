@@ -1,0 +1,27 @@
+Phase 1 — MUST HAVE
+1. Inventory
+• Bikes 
+• Spare parts 
+• Serial/VIN 
+• Stock movements 
+• Reorder alerts 
+2. POS
+• Sales 
+• Payments 
+• Receipts 
+• Discounts 
+• Stock deduction 
+4. Customer CRM
+• Customer 
+• Bikes 
+• Purchase history 
+• Service history 
+5. Reporting
+• Sales 
+• Gross profit 
+• Stock 
+• Product performance 
+6. Controls
+• User permissions 
+• Approvals 
+• Audit trail

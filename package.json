@@ -1,0 +1,20 @@
+{
+  "name": "spiro-erp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Spiro ERP Phase 1 — admin dashboard + offline-first POS PWA + shared API",
+  "scripts": {
+    "dev": "concurrently -n server,admin,pos -c green,cyan,yellow --kill-others \"npm run dev --prefix server\" \"npm run dev --prefix admin\" \"npm run dev --prefix pos\"",
+    "dev:server": "npm run dev --prefix server",
+    "dev:admin": "npm run dev --prefix admin",
+    "dev:pos": "npm run dev --prefix pos",
+    "install:all": "npm install --prefix server && npm install --prefix admin && npm install --prefix pos",
+    "seed": "npm run seed --prefix server",
+    "smoke": "npm run smoke --prefix server",
+    "test:offline": "npm run test:offline --prefix server",
+    "build": "npm run build --prefix admin && npm run build --prefix pos"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

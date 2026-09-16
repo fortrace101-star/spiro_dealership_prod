@@ -1,0 +1,356 @@
+﻿A. MOTORCYCLE / VEHICLE INVENTORY
+This is particularly important for the Spiro bikes, because each motorcycle should be individually traceable.
+The system should capture:
+* Brand - Spiro / other 
+* Model 
+* Colour 
+* Year 
+* VIN/chassis number 
+* Engine/motor number 
+* Battery number/serial number 
+* Battery type/specification 
+* Odometer at sale 
+* Purchase cost 
+* Landed cost 
+* Selling price 
+* Discount 
+* Dealer margin 
+* Current location 
+* Date received 
+* Date sold 
+* Days in stock 
+* Customer assigned to it 
+* Warranty status 
+Critical requirement
+You should be able to type a VIN/chassis number and immediately see:
+Where did this bike come from → what did it cost us → when did we sell it → who bought it → warranty → every service visit → parts replaced → payments → current status.
+Serial/VIN tracking is a standard capability worth insisting on in a dealership system. 
+
+
+
+B. SPARE-PARTS INVENTORY
+This is going to be one of your biggest operational areas.
+Every part should have:
+* SKU/part number 
+* Product name 
+* Brand 
+* Supplier 
+* Purchase price 
+* Selling price 
+* Wholesale price 
+* Current stock 
+* Minimum stock level 
+* Reorder level 
+* Barcode 
+* Serial/batch number where applicable 
+* Stock value 
+* Last purchase price 
+* Average purchase cost 
+Very important:
+You need stock movement history.
+For example:
+Brake pads
+Opening stock: 50
+Purchased: +30
+Sold: -12
+Used in workshop: -8
+Damaged: -2
+Transferred: -5
+Closing stock: 53
+And the system should tell you who made every adjustment and when.
+Modern inventory systems commonly include barcode operations, reorder levels, warehouse transfers and serial/batch tracking. 
+
+C. POINT OF SALE / SALES
+You need a proper POS connected directly to inventory.
+A salesperson should be able to:
+1. Select bike/product 
+2. Add parts/accessories 
+3. Apply approved discount 
+4. Select payment method 
+5. Automatically reduce stock 
+6. Record revenue 
+7. Record salesperson 
+Payment methods should include:
+* Cash 
+* Mobile Money 
+* Bank 
+* Card 
+* Credit 
+* Split payment 
+VERY IMPORTANT
+Don't allow somebody to sell an item without the system updating inventory.
+Sale → stock deduction → revenue → customer account → reporting
+should happen automatically.
+
+
+E. CUSTOMER DATABASE / CRM
+This is where you can create long-term value.
+Every customer should have one profile.
+For example:
+Customer
+John
+Motorcycles:
+* Spiro X1 
+* Bajaj Boxer 
+* TVS 
+History:
+* Purchased Spiro - March 2026 
+* Service - April 
+* Battery inspection - June 
+* Brake replacement - July 
+* Spare parts purchases - etc. 
+You should be able to see:
+Customer lifetime value
+and
+Customer's entire motorcycle/service history.
+This is often called a Customer 360 view in dealership systems. 
+
+F. WARRANTY MANAGEMENT
+For Spiro this is essential.
+The system should distinguish:
+Manufacturer warranty
+from
+Your workshop/service warranty
+For every bike:
+* Warranty start date 
+* Warranty end date 
+* Covered components 
+* Battery warranty 
+* Motor warranty 
+* Claim number 
+* Claim status 
+* Parts replaced 
+* Who approved it 
+* Cost to dealership 
+* Cost recovered from manufacturer 
+You should eventually be able to produce:
+"How much did Spiro warranty claims cost us this month?"
+and
+"Which component is generating the most warranty claims?"
+Warranty tracking is a core capability in modern automotive DMS platforms. 
+
+G. PURCHASING & SUPPLIERS
+Don't overlook this.
+The system should handle:
+Purchase Request → Purchase Order → Goods Received → Stock → Supplier Invoice → Payment
+Supplier records should include:
+* Supplier 
+* Contact 
+* Products supplied 
+* Price history 
+* Payment terms 
+* Outstanding balance 
+* Purchase history 
+* Delivery performance 
+And ideally:
+Landed cost
+For imported Spiro bikes/parts:
+Purchase price + freight + duty + clearing + transport + other costs = actual landed cost
+That gives you the real margin, rather than an artificial margin based only on purchase price.
+
+
+
+
+
+
+H. SALES & PRODUCT PERFORMANCE DASHBOARD
+This is the part I think will be particularly useful to you as the business owner.
+You should be able to open your phone and see:
+TODAY
+Sales: UGX X
+Parts sales: UGX X
+Workshop: UGX X
+Motorcycle sales: UGX X
+Cash received: UGX X
+Mobile Money: UGX X
+Credit: UGX X
+Gross profit: UGX X
+Then:
+THIS MONTH
+KPIResultBikes sold12Parts sold486Workshop jobs174RevenueUGX XGross profitUGX XAverage transactionUGX XOutstanding creditUGX XStock valueUGX X
+I. PRODUCT PERFORMANCE
+This is where you stop guessing what is selling.
+The system should tell you:
+Top 20 products by quantity
+Top 20 products by revenue
+Top 20 products by gross profit
+Slow-moving products
+Dead stock
+Fast-moving products
+Products approaching stock-out
+Products with declining sales
+Products with increasing demand
+And importantly:
+Margin %
+Because a product selling 500 units isn't necessarily better than one selling 100 units if the latter generates much more profit.
+
+J. STAFF / MECHANIC PERFORMANCE
+I'd definitely include this.
+For salespeople:
+* Leads 
+* Bikes sold 
+* Parts sales 
+* Revenue 
+* Gross margin 
+* Conversion rate 
+* Discounts given 
+
+11. APPROVALS & CONTROLS
+This is very important if you don't want the system to become another source of leakage.
+For example:
+A salesperson should NOT be able to:
+* Change cost price 
+* Give unlimited discounts 
+* Delete sales 
+* Delete invoices 
+* Adjust stock 
+* Change payment records 
+Instead:
+Discount > 5% → Manager approval
+Stock adjustment → Manager approval
+Credit sale → Credit approval
+Refund → Manager approval
+Warranty claim → Service manager approval
+And every action should have:
+User + date + time + old value + new value
+That's your audit trail.
+
+
+14. BARCODE / QR CODE
+I would definitely request this.
+Parts should be scannable.
+You could eventually have:
+Part → Barcode → Stock → Sale → Customer
+For Spiro bikes, you could also put a QR code on the bike/customer file that opens its service history.
+
+
+17. EFRIS / URA
+Because you're operating in Uganda, ask the vendor specifically about URA/EFRIS integration and compliant invoicing/reporting rather than assuming it is covered.
+Some Uganda ERP/garage platforms already advertise EFRIS-aware or URA-oriented reporting. 
+
+* Accounting system 
+* Barcode scanners 
+* Receipt printers 
+* Email 
+* Website/e-commerce 
+* Spiro/OEM systems, if Spiro provides an API 
+* Future payment/financing providers 
+
+19. SECURITY & DATA OWNERSHIP
+This is something I would put into the contract.
+Ask:
+Who owns the data?
+It should be you, not the vendor.
+Also require:
+* Daily automated backups 
+* Cloud hosting 
+* User permissions 
+* Two-factor authentication 
+* Audit logs 
+* Data export 
+* Disaster recovery 
+* Password policies 
+* Encryption 
+* Vendor access controls 
+And critically:
+If we terminate the contract, can we export the entire database in a usable format?
+If they hesitate, that's a red flag.
+
+20. AI / AUTOMATION - BUT ONLY AFTER THE CORE SYSTEM WORKS
+Don't let a vendor impress you with "AI" while basic stock control is weak.
+Once the foundation works, AI can help with:
+* Demand forecasting 
+* Predicting stock-outs 
+* Identifying dead stock 
+* Predicting service requirements 
+* Customer churn 
+* Recommended spare-parts purchases 
+* Sales forecasting 
+* Automated customer follow-ups 
+* Natural-language reporting 
+For example, you should eventually be able to ask:
+"What were my five most profitable products last month?"
+or
+"Which spare parts are likely to run out in the next 30 days?"
+and get an answer immediately.
+
+The most important thing: insist on ONE connected system
+I would draw the architecture for the vendor like this:
+CUSTOMER
+↓
+LEAD / ENQUIRY
+↓
+MOTORCYCLE SALE
+↓
+MOTORCYCLE + VIN
+↓
+CUSTOMER PROFILE
+↓
+WARRANTY
+↓
+SERVICE HISTORY
+↓
+JOB CARD
+↓
+PARTS USED
+↓
+INVENTORY DEDUCTION
+↓
+INVOICE
+↓
+PAYMENT
+↓
+CUSTOMER FOLLOW-UP
+↓
+NEXT SERVICE
+Every stage should feed the next one.
+That is much more powerful than having:
+POS + Excel stock sheet + WhatsApp + paper job cards + separate accounting.
+
+My recommended MVP for your shop
+Don't overbuild version 1.
+Phase 1 - MUST HAVE
+1. Inventory
+* Bikes 
+* Spare parts 
+* Serial/VIN 
+* Stock movements 
+* Reorder alerts 
+2. POS
+* Sales 
+* Payments 
+* Receipts 
+* Discounts 
+* Stock deduction 
+4. Customer CRM
+* Customer 
+* Bikes 
+* Purchase history 
+* Service history 
+5. Reporting
+* Sales 
+* Gross profit 
+* Stock 
+* Product performance 
+6. Controls
+* User permissions 
+* Approvals 
+* Audit trail 
+Phase 2
+* Warranty 
+* Procurement 
+* Supplier management 
+* WhatsApp/SMS 
+* EFRIS 
+* Mobile app 
+* Multi-branch 
+* Advanced dashboards 
+Phase 3
+* Online store 
+* Customer portal 
+* Financing 
+* AI forecasting 
+* Spiro/OEM integration 
+* Loyalty programme 
+* Automated marketing 
+
