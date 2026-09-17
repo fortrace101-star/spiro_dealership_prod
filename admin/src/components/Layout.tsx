@@ -122,7 +122,7 @@ export default function Layout() {
           {/* DEV ONLY — remove before production */}
           <button
             onClick={() => setShowWipe(true)}
-            className="w-full text-xs px-3 py-2 rounded-lg border border-amber-500/30 text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 transition"
+            className="hidden w-full text-xs px-3 py-2 rounded-lg border border-amber-500/30 text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 transition"
           >
             🧹 Dev: reset all data
           </button>
