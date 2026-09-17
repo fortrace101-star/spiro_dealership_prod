@@ -86,8 +86,8 @@ export default function TeamPage() {
       {lastCode && (
         <div className="card p-5 mb-4 border-brand-500/40 bg-brand-500/5">
           <div className="text-xs uppercase tracking-wider text-brand-300 font-semibold mb-2">New activation code</div>
-          <div className="flex items-center gap-3">
-            <code className="text-2xl font-mono font-bold text-white tracking-wider">{lastCode}</code>
+          <div className="flex flex-wrap items-center gap-3">
+            <code className="text-xl sm:text-2xl font-mono font-bold text-white tracking-wider break-all">{lastCode}</code>
             <button className="btn-ghost text-xs" onClick={() => copy(lastCode)}>{copied ? '✓ Copied' : 'Copy'}</button>
             <button className="btn-ghost text-xs" onClick={() => setLastCode(null)}>Dismiss</button>
           </div>
@@ -111,7 +111,8 @@ export default function TeamPage() {
           ) : users.length === 0 ? (
             <EmptyState message="No staff yet." />
           ) : (
-            <table className="w-full">
+            <div className="overflow-x-auto">
+              <table className="w-full">
               <tbody>
                 {users.map((u) => (
                   <tr key={u.id}>
@@ -147,7 +148,8 @@ export default function TeamPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+              </table>
+            </div>
           )}
         </div>
 
@@ -161,6 +163,7 @@ export default function TeamPage() {
           ) : codes.length === 0 ? (
             <EmptyState message="No codes generated yet." />
           ) : (
+            <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr>
@@ -205,6 +208,7 @@ export default function TeamPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </div>
@@ -213,7 +217,7 @@ export default function TeamPage() {
         <Modal title="Generate activation code" onClose={() => setShowForm(false)}>
           <form onSubmit={createCode} className="space-y-3">
             <Field label="Label (e.g. Kampala Road counter)"><input className="input" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} /></Field>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Role">
                 <select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                   <option value="cashier">Cashier (POS)</option>
@@ -241,9 +245,9 @@ export default function TeamPage() {
                 ))}
               </div>
             </Field>
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-ghost" onClick={() => setShowForm(false)}>Cancel</button>
-              <button className="btn-primary">Generate</button>
+            <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+              <button type="button" className="btn-ghost w-full sm:w-auto" onClick={() => setShowForm(false)}>Cancel</button>
+              <button className="btn-primary w-full sm:w-auto">Generate</button>
             </div>
           </form>
         </Modal>

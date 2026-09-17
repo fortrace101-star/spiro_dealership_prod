@@ -33,7 +33,7 @@ export default function LoginScreen() {
   }
 
   return (
-    <div className="min-h-full flex items-center justify-center p-6">
+    <div className="min-h-full flex items-center justify-center p-4 sm:p-6">
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-8">
           <img src="/logo.png" alt="Spiro" className="h-16 w-16 object-contain mb-4" />
@@ -77,10 +77,6 @@ export default function LoginScreen() {
               ✓ Signed in — taking you to your dashboard…
             </p>
           )}
-
-          <p className="text-[11px] text-slate-600 text-center">
-            Demo (after seed): admin@spiro.demo / admin123
-          </p>
         </form>
       </div>
     </div>

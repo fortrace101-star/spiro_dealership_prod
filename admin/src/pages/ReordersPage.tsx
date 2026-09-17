@@ -58,7 +58,7 @@ export default function ReordersPage() {
         actions={<button className="btn-primary" onClick={() => { setShowForm(true); setError('') }}>+ New reorder list</button>}
       />
 
-      <div className="flex gap-2 mb-4">
+      <div className="flex flex-wrap gap-2 mb-4">
         <button className={tab === 'reorders' ? 'btn-primary text-xs' : 'btn-ghost text-xs'} onClick={() => setTab('reorders')}>
           Reorder lists
         </button>
@@ -214,7 +214,7 @@ function ReorderForm({ products, onClose, onSaved }: { products: Product[]; onCl
   return (
     <Modal title="New reorder list" onClose={onClose}>
       <form onSubmit={submit} className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Title *"><input className="input" value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
           <Field label="Note"><input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional" /></Field>
         </div>
@@ -261,9 +261,9 @@ function ReorderForm({ products, onClose, onSaved }: { products: Product[]; onCl
         </div>
 
         {error && <p className="text-sm text-red-400">{error}</p>}
-        <div className="flex justify-end gap-2 pt-2">
-          <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save reorder list'}</button>
+        <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+          <button type="button" className="btn-ghost w-full sm:w-auto" onClick={onClose}>Cancel</button>
+          <button className="btn-primary w-full sm:w-auto" disabled={busy}>{busy ? 'Saving…' : 'Save reorder list'}</button>
         </div>
       </form>
     </Modal>

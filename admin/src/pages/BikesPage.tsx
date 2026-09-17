@@ -71,19 +71,19 @@ export default function BikesPage() {
       />
 
       {/* VIN 360 lookup */}
-      <form onSubmit={runLookup} className="card p-4 mb-4 flex gap-3 items-center">
+      <form onSubmit={runLookup} className="card p-4 mb-4 flex flex-col sm:flex-row gap-3 sm:items-center">
         <svg className="h-5 w-5 text-brand-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
           <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.2-5.2M17 10a7 7 0 11-14 0 7 7 0 0114 0z" />
         </svg>
         <input className="input flex-1 font-mono" placeholder="Type a VIN / chassis number for full 360 trace…" value={lookupVin} onChange={(e) => setLookupVin(e.target.value)} required />
-        <button className="btn-primary" disabled={lookupBusy}>{lookupBusy ? 'Tracing…' : 'Trace'}</button>
+        <button className="btn-primary w-full sm:w-auto" disabled={lookupBusy}>{lookupBusy ? 'Tracing…' : 'Trace'}</button>
       </form>
 
       {lookupError && <p className="text-sm text-red-400 mb-4">{lookupError}</p>}
 
       {lookupResult && (
         <div className="card p-5 mb-4 border-brand-500/30">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
             <Info label="Model" value={`${lookupResult.bike.model}${lookupResult.bike.color ? ` · ${lookupResult.bike.color}` : ''}`} />
             <Info label="Year" value={String(lookupResult.bike.year ?? '—')} />
             <Info label="Motor" value={lookupResult.bike.motor_number || '—'} />
@@ -112,8 +112,8 @@ export default function BikesPage() {
 
       {/* Filters */}
       <div className="card p-4 mb-4 flex flex-wrap gap-3 items-center">
-        <input className="input max-w-xs" placeholder="Search VIN, model, motor…" value={q} onChange={(e) => setQ(e.target.value)} />
-        <select className="input max-w-[160px]" value={status} onChange={(e) => setStatus(e.target.value)}>
+        <input className="input w-full sm:max-w-xs" placeholder="Search VIN, model, motor…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <select className="input w-full sm:max-w-[160px]" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">All statuses</option>
           <option value="in_stock">In stock</option>
           <option value="reserved">Reserved</option>
@@ -163,29 +163,29 @@ export default function BikesPage() {
       {showForm && (
         <Modal title="Add bike to inventory" onClose={() => setShowForm(false)}>
           <form onSubmit={saveBike} className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="VIN / Chassis *"><input className="input font-mono" value={form.vin} onChange={(e) => setForm({ ...form, vin: e.target.value })} required /></Field>
               <Field label="Model *"><input className="input" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} required placeholder="Spiro Ekon 100" /></Field>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Field label="Colour"><input className="input" value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} /></Field>
               <Field label="Year"><input className="input" type="number" value={form.year} onChange={(e) => setForm({ ...form, year: e.target.value })} /></Field>
               <Field label="Odometer (km)"><input className="input" type="number" value={form.odometer_km} onChange={(e) => setForm({ ...form, odometer_km: e.target.value })} /></Field>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Motor number"><input className="input font-mono" value={form.motor_number} onChange={(e) => setForm({ ...form, motor_number: e.target.value })} /></Field>
               <Field label="Battery serial"><input className="input font-mono" value={form.battery_serial} onChange={(e) => setForm({ ...form, battery_serial: e.target.value })} /></Field>
             </div>
             <Field label="Battery spec"><input className="input" value={form.battery_spec} onChange={(e) => setForm({ ...form, battery_spec: e.target.value })} placeholder="60V 32Ah LFP" /></Field>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Field label="Cost (UGX)"><input className="input" type="number" value={form.cost_price} onChange={(e) => setForm({ ...form, cost_price: e.target.value })} /></Field>
               <Field label="Sell price (UGX)"><input className="input" type="number" value={form.selling_price} onChange={(e) => setForm({ ...form, selling_price: e.target.value })} /></Field>
               <Field label="Location"><input className="input" value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} /></Field>
             </div>
             {error && <p className="text-sm text-red-400">{error}</p>}
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-ghost" onClick={() => setShowForm(false)}>Cancel</button>
-              <button className="btn-primary">Add bike</button>
+            <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+              <button type="button" className="btn-ghost w-full sm:w-auto" onClick={() => setShowForm(false)}>Cancel</button>
+              <button className="btn-primary w-full sm:w-auto">Add bike</button>
             </div>
           </form>
         </Modal>

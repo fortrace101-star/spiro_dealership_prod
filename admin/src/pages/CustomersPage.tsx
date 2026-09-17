@@ -54,7 +54,7 @@ export default function CustomersPage() {
       />
 
       <div className="card p-4 mb-4 flex flex-wrap gap-3 items-center">
-        <input className="input max-w-xs" placeholder="Search name or phone…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className="input w-full sm:max-w-xs" placeholder="Search name or phone…" value={q} onChange={(e) => setQ(e.target.value)} />
         {customers && <span className="text-sm text-slate-500 ml-auto">{customers.length} customers</span>}
       </div>
 
@@ -95,7 +95,7 @@ export default function CustomersPage() {
       {detail && (
         <div className="fixed inset-0 z-50 flex justify-end" onClick={() => setDetail(null)}>
           <div className="absolute inset-0 bg-black/60" />
-          <div className="relative w-full max-w-lg h-full bg-[#12161d] border-l border-slate-800 p-6 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="relative w-full max-w-lg h-full bg-[#12161d] border-l border-slate-800 p-4 sm:p-6 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start justify-between mb-6">
               <div>
                 <div className="text-lg font-bold text-white">{detail.customer.full_name}</div>
@@ -104,7 +104,7 @@ export default function CustomersPage() {
               <button className="btn-ghost text-xs" onClick={() => setDetail(null)}>Close</button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 mb-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
               <div className="bg-[#0b0e13] rounded-xl p-3 border border-slate-800/60">
                 <div className="text-[10px] uppercase tracking-wider text-slate-500">Lifetime value</div>
                 <div className="text-xl font-bold text-brand-300 mt-0.5">{ugx(detail.purchases.reduce((s, p) => s + Number(p.total), 0))}</div>
@@ -154,16 +154,16 @@ export default function CustomersPage() {
         <Modal title="Add customer" onClose={() => setShowForm(false)}>
           <form onSubmit={save} className="space-y-3">
             <Field label="Full name *"><input className="input" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} required /></Field>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Phone"><input className="input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+25677…" /></Field>
               <Field label="Email"><input className="input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
             </div>
             <Field label="Address"><input className="input" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></Field>
             <Field label="Notes"><textarea className="input" rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
             {error && <p className="text-sm text-red-400">{error}</p>}
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-ghost" onClick={() => setShowForm(false)}>Cancel</button>
-              <button className="btn-primary">Add customer</button>
+            <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+              <button type="button" className="btn-ghost w-full sm:w-auto" onClick={() => setShowForm(false)}>Cancel</button>
+              <button className="btn-primary w-full sm:w-auto">Add customer</button>
             </div>
           </form>
         </Modal>

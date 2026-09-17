@@ -67,7 +67,7 @@ export default function SettingsPage() {
 
       {range ? (
         <>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <KpiCard label="Revenue" value={ugx(range.kpi.revenue)} delta={`${range.kpi.sales_count} transactions · ${period.label}`} />
             <KpiCard label="Gross profit" value={ugx(range.kpi.profit)} delta={`Avg ${ugx(range.kpi.avg_transaction)}`} />
             <KpiCard label="Bikes sold" value={String(range.kpi.bikes_sold)} delta={`${range.kpi.parts_sold} parts sold`} />
@@ -107,6 +107,7 @@ export default function SettingsPage() {
       {/* Cashier leaderboard */}
       <div className="card p-5 mt-4">
         <h3 className="font-semibold text-white mb-4">Staff performance</h3>
+        <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
             <tr>
@@ -129,6 +130,7 @@ export default function SettingsPage() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Notifications */}

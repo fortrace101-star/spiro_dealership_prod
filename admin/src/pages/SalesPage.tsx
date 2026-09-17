@@ -46,8 +46,8 @@ export default function SalesPage() {
       <div className="card p-4 mb-4 space-y-3">
         <PeriodPicker period={period} onChange={setPeriod} />
         <div className="flex flex-wrap gap-3 items-center">
-          <input className="input max-w-xs" placeholder="Search receipt, cashier, customer…" value={q} onChange={(e) => setQ(e.target.value)} />
-          <select className="input max-w-[180px]" value={payment} onChange={(e) => setPayment(e.target.value)}>
+          <input className="input w-full sm:max-w-xs" placeholder="Search receipt, cashier, customer…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <select className="input w-full sm:max-w-[180px]" value={payment} onChange={(e) => setPayment(e.target.value)}>
             <option value="">All payments</option>
             {Object.entries(PAYMENT_LABELS).map(([k, v]) => (
               <option key={k} value={k}>{v}</option>
@@ -98,7 +98,7 @@ export default function SalesPage() {
       {detail && (
         <div className="fixed inset-0 z-50 flex justify-end" onClick={() => setDetail(null)}>
           <div className="absolute inset-0 bg-black/60" />
-          <div className="relative w-full max-w-lg h-full bg-[#12161d] border-l border-slate-800 p-6 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="relative w-full max-w-lg h-full bg-[#12161d] border-l border-slate-800 p-4 sm:p-6 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start justify-between mb-6">
               <div>
                 <div className="font-mono text-brand-300 text-lg">{detail.sale.receipt_no}</div>
@@ -107,7 +107,7 @@ export default function SalesPage() {
               <button className="btn-ghost text-xs" onClick={() => setDetail(null)}>Close</button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 text-sm mb-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm mb-6">
               <Info label="Cashier" value={detail.sale.cashier_name || '—'} />
               <Info label="Customer" value={detail.sale.customer_name || 'Walk-in'} />
               <Info label="Payment" value={PAYMENT_LABELS[detail.sale.payment_method] || detail.sale.payment_method} />

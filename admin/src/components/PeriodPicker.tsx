@@ -41,10 +41,10 @@ export function PeriodPicker({
       </div>
 
       {showCustom && (
-        <div className="card p-4 mt-3 flex flex-wrap gap-3 items-end">
+        <div className="card p-4 mt-3 grid gap-3 sm:flex sm:flex-wrap sm:items-end">
           <Field label="Last N days (max 730)">
             <input
-              className="input max-w-[140px]"
+              className="input sm:max-w-[140px]"
               type="number"
               min={1}
               max={730}
@@ -53,21 +53,21 @@ export function PeriodPicker({
               placeholder="e.g. 45"
             />
           </Field>
-          <span className="text-xs text-slate-500 pb-2.5">or</span>
+          <span className="text-xs text-slate-500 sm:pb-2.5">or</span>
           <Field label="From">
-            <input className="input max-w-[160px]" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
+            <input className="input sm:max-w-[160px]" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
           </Field>
           <Field label="To">
-            <input className="input max-w-[160px]" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
+            <input className="input sm:max-w-[160px]" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
           </Field>
           <button
             type="button"
-            className="btn-primary text-xs"
+            className="btn-primary text-xs w-full sm:w-auto"
             onClick={() => onChange(customPeriod(customDays ? Number(customDays) : undefined, customFrom || undefined, customTo || undefined))}
           >
             Apply
           </button>
-          {period.id === 'custom' && <span className="text-xs text-brand-300 pb-2.5">Active: {period.label}</span>}
+          {period.id === 'custom' && <span className="text-xs text-brand-300 sm:pb-2.5">Active: {period.label}</span>}
         </div>
       )}
     </div>

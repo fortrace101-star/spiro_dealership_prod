@@ -42,7 +42,7 @@ export default function ApprovalsPage() {
     <div>
       <PageHeader title="Approvals" subtitle="Discount, credit and stock-adjustment requests from the floor" />
 
-      <div className="flex gap-2 mb-4">
+      <div className="flex flex-wrap gap-2 mb-4">
         {(['pending', 'approved', 'rejected'] as const).map((s) => (
           <button
             key={s}
@@ -60,16 +60,17 @@ export default function ApprovalsPage() {
         ) : approvals.length === 0 ? (
           <EmptyState message={`No ${status} approvals.`} />
         ) : (
-          <table className="w-full">
-            <thead>
-              <tr>
-                <th className="th">Type</th>
-                <th className="th">Request</th>
-                <th className="th">Requested by</th>
-                <th className="th">When</th>
-                <th className="th"></th>
-              </tr>
-            </thead>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr>
+                  <th className="th">Type</th>
+                  <th className="th">Request</th>
+                  <th className="th">Requested by</th>
+                  <th className="th">When</th>
+                  <th className="th"></th>
+                </tr>
+              </thead>
             <tbody>
               {approvals.map((a) => (
                 <tr key={a.id}>
@@ -91,8 +92,9 @@ export default function ApprovalsPage() {
                   </td>
                 </tr>
               ))}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>

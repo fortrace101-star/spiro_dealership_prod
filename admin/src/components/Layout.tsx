@@ -32,6 +32,7 @@ export default function Layout() {
   const [wiping, setWiping] = useState(false)
   const [wipeError, setWipeError] = useState('')
   const [toasts, setToasts] = useState<Toast[]>([])
+  const [navOpen, setNavOpen] = useState(false)
 
   // In-app toast when a push arrives (e.g. a POS sale) while the dashboard is open
   useEffect(() => {
@@ -65,8 +66,17 @@ export default function Layout() {
 
   return (
     <div className="h-full flex">
-      {/* Sidebar */}
-      <aside className="w-60 shrink-0 border-r border-slate-800/70 bg-[#0e1218] flex flex-col">
+      {/* Mobile nav backdrop */}
+      {navOpen && <div className="fixed inset-0 z-40 bg-black/60 lg:hidden" onClick={() => setNavOpen(false)} />}
+
+      {/* Sidebar — slide-in drawer on mobile, static column on desktop */}
+      <aside
+        className={cn(
+          'fixed inset-y-0 left-0 z-50 w-64 max-w-[85vw] shrink-0 border-r border-slate-800/70 bg-[#0e1218] flex flex-col',
+          'transition-transform duration-200 lg:static lg:w-60 lg:max-w-none lg:transition-none lg:translate-x-0 lg:transform-none',
+          navOpen ? 'translate-x-0' : '-translate-x-full',
+        )}
+      >
         <div className="h-16 flex items-center gap-3 px-5 border-b border-slate-800/70">
           <img src="/logo.png" alt="Spiro" className="h-8 w-8 object-contain" />
           <div>
@@ -81,6 +91,7 @@ export default function Layout() {
               key={item.to}
               to={item.to}
               end={item.to === '/'}
+              onClick={() => setNavOpen(false)}
               className={({ isActive }) =>
                 cn(
                   'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition',
@@ -120,9 +131,21 @@ export default function Layout() {
 
       {/* Main */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-16 shrink-0 border-b border-slate-800/70 flex items-center justify-between px-6 bg-[#0e1218]/60 backdrop-blur">
-          <div className="text-sm text-slate-400">Phase 1 · Uganda Operations</div>
-          <div className="flex items-center gap-4">
+        <header className="h-16 shrink-0 border-b border-slate-800/70 flex items-center justify-between px-4 sm:px-6 bg-[#0e1218]/60 backdrop-blur gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              className="btn-ghost lg:hidden !px-2.5 !py-2"
+              aria-label="Open navigation"
+              onClick={() => setNavOpen(true)}
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+            <div className="text-sm text-slate-400 truncate hidden sm:block">Phase 1 · Uganda Operations</div>
+            <div className="font-semibold text-white sm:hidden">Spiro Admin</div>
+          </div>
+          <div className="flex items-center gap-3 sm:gap-4">
             <div className="text-right">
               <div className="text-sm font-semibold text-white">{user?.full_name}</div>
               <div className="text-[11px] text-slate-500 capitalize">{user?.role}</div>
@@ -139,13 +162,13 @@ export default function Layout() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6">
           <Outlet />
         </main>
       </div>
 
       {/* Sale / push toasts */}
-      <div className="fixed bottom-4 right-4 z-[60] space-y-2 w-80">
+      <div className="fixed bottom-4 left-4 right-4 sm:left-auto z-[60] space-y-2 sm:w-80">
         {toasts.map((t) => (
           <div key={t.id} className="card p-4 border-brand-500/40 bg-[#12161d] shadow-xl animate-pulse">
             <div className="text-sm font-semibold text-white">{t.title}</div>
@@ -172,10 +195,10 @@ export default function Layout() {
             autoFocus
           />
           {wipeError && <p className="text-sm text-red-400 mb-3">{wipeError}</p>}
-          <div className="flex justify-end gap-2">
-            <button className="btn-ghost" onClick={() => setShowWipe(false)}>Cancel</button>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button className="btn-ghost w-full sm:w-auto" onClick={() => setShowWipe(false)}>Cancel</button>
             <button
-              className="btn-danger"
+              className="btn-danger w-full sm:w-auto"
               disabled={wipeConfirm !== 'WIPE' || wiping}
               onClick={doWipe}
             >

@@ -80,7 +80,7 @@ export default function InventoryPage() {
       />
 
       <div className="card p-4 mb-4 flex flex-wrap gap-3 items-center">
-        <input className="input max-w-xs" placeholder="Search name, SKU, barcode…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className="input w-full sm:max-w-xs" placeholder="Search name, SKU, barcode…" value={q} onChange={(e) => setQ(e.target.value)} />
         <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer">
           <input type="checkbox" checked={lowOnly} onChange={(e) => setLowOnly(e.target.checked)} className="accent-brand-500" />
           Low stock only
@@ -144,12 +144,12 @@ export default function InventoryPage() {
       {showForm && (
         <Modal title={editing ? `Edit ${editing.name}` : 'Add product'} onClose={() => setShowForm(false)}>
           <form onSubmit={saveProduct} className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="SKU *"><input className="input" value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} required /></Field>
               <Field label="Barcode"><input className="input" value={form.barcode} onChange={(e) => setForm({ ...form, barcode: e.target.value })} /></Field>
             </div>
             <Field label="Name *"><input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></Field>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Field label="Category">
                 <select className="input" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
                   <option>Spare part</option><option>Accessory</option><option>Consumable</option>
@@ -158,21 +158,21 @@ export default function InventoryPage() {
               <Field label="Brand"><input className="input" value={form.brand} onChange={(e) => setForm({ ...form, brand: e.target.value })} /></Field>
               <Field label="Supplier"><input className="input" value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} /></Field>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Field label="Cost (UGX)"><input className="input" type="number" value={form.cost_price} onChange={(e) => setForm({ ...form, cost_price: e.target.value })} /></Field>
               <Field label="Sell price (UGX)"><input className="input" type="number" value={form.selling_price} onChange={(e) => setForm({ ...form, selling_price: e.target.value })} /></Field>
               <Field label={editing ? 'Stock (use Adjust)' : 'Opening qty'}>
                 <input className="input" type="number" value={form.stock_qty} onChange={(e) => setForm({ ...form, stock_qty: e.target.value })} disabled={!!editing} />
               </Field>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Min stock"><input className="input" type="number" value={form.min_stock} onChange={(e) => setForm({ ...form, min_stock: e.target.value })} /></Field>
               <Field label="Reorder level"><input className="input" type="number" value={form.reorder_level} onChange={(e) => setForm({ ...form, reorder_level: e.target.value })} /></Field>
             </div>
             {error && <p className="text-sm text-red-400">{error}</p>}
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-ghost" onClick={() => setShowForm(false)}>Cancel</button>
-              <button className="btn-primary">{editing ? 'Save changes' : 'Add product'}</button>
+            <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+              <button type="button" className="btn-ghost w-full sm:w-auto" onClick={() => setShowForm(false)}>Cancel</button>
+              <button className="btn-primary w-full sm:w-auto">{editing ? 'Save changes' : 'Add product'}</button>
             </div>
           </form>
         </Modal>
@@ -191,7 +191,7 @@ export default function InventoryPage() {
       {movements && (
         <div className="fixed inset-0 z-50 flex justify-end" onClick={() => setMovements(null)}>
           <div className="absolute inset-0 bg-black/60" />
-          <div className="relative w-full max-w-md h-full bg-[#12161d] border-l border-slate-800 p-6 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="relative w-full max-w-md h-full bg-[#12161d] border-l border-slate-800 p-4 sm:p-6 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-white">Stock movements</h3>
               <button className="btn-ghost text-xs" onClick={() => setMovements(null)}>Close</button>
@@ -252,7 +252,7 @@ function AdjustModal({ product, onClose, onDone }: { product: Product; onClose: 
       <form onSubmit={submit} className="space-y-3">
         <div className="text-sm text-slate-400">Current stock: <span className="text-white font-semibold">{product.stock_qty}</span></div>
         <Field label="Quantity (+ to add, − to remove)"><input className="input" placeholder="e.g. -2 or 10" value={qty} onChange={(e) => setQty(e.target.value)} autoFocus /></Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Type">
             <select className="input" value={type} onChange={(e) => setType(e.target.value)}>
               <option value="adjustment">Adjustment</option>
@@ -266,9 +266,9 @@ function AdjustModal({ product, onClose, onDone }: { product: Product; onClose: 
           <Field label="Note"><input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Reason…" /></Field>
         </div>
         {error && <p className="text-sm text-red-400">{error}</p>}
-        <div className="flex justify-end gap-2 pt-2">
-          <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Apply adjustment'}</button>
+        <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+          <button type="button" className="btn-ghost w-full sm:w-auto" onClick={onClose}>Cancel</button>
+          <button className="btn-primary w-full sm:w-auto" disabled={busy}>{busy ? 'Saving…' : 'Apply adjustment'}</button>
         </div>
       </form>
     </Modal>
@@ -277,9 +277,9 @@ function AdjustModal({ product, onClose, onDone }: { product: Product; onClose: 
 
 export function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/60" />
-      <div className="relative card w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <div className="relative card w-full sm:max-w-lg rounded-b-none sm:rounded-2xl p-4 sm:p-6 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold text-white">{title}</h3>
           <button className="text-slate-500 hover:text-white text-xl leading-none" onClick={onClose}>×</button>

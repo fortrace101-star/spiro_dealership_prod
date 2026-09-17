@@ -122,7 +122,7 @@ export default function OverviewPage() {
       />
 
       {/* KPI row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard
           label="Revenue"
           value={ugx(t.revenue)}
@@ -218,7 +218,7 @@ export default function OverviewPage() {
       </div>
 
       {/* Alerts strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
         <AlertCard label="Low stock alerts" value={t.low_stock_count} tone="amber" onClick={openLowStock} />
         <AlertCard label="Pending approvals" value={t.pending_approvals} tone="sky" onClick={openApprovals} />
         <AlertCard label="Awaiting sync (POS)" value={t.pending_sync} tone="violet" onClick={openSync} />
@@ -255,6 +255,7 @@ export default function OverviewPage() {
           {low.length === 0 ? (
             <EmptyState message="All stock levels healthy 🎉" />
           ) : (
+            <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr>
@@ -276,6 +277,7 @@ export default function OverviewPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </div>
@@ -299,6 +301,7 @@ export default function OverviewPage() {
           {detail.products.length === 0 ? (
             <EmptyState message="All stock levels healthy 🎉" />
           ) : (
+            <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr>
@@ -326,6 +329,7 @@ export default function OverviewPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </Modal>
       )}
@@ -363,16 +367,17 @@ function SalesTable({ sales, showStatus }: { sales: Sale[]; showStatus?: boolean
   if (sales.length === 0) return <EmptyState message="Nothing to show for this period." />
   return (
     <>
-      <table className="w-full">
-        <thead>
-          <tr>
-            <th className="th">Receipt</th>
-            <th className="th">When</th>
-            <th className="th">Customer</th>
-            {showStatus ? <th className="th">Status</th> : <th className="th">Method</th>}
-            <th className="th text-right">Total</th>
-          </tr>
-        </thead>
+          <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr>
+                <th className="th">Receipt</th>
+                <th className="th">When</th>
+                <th className="th">Customer</th>
+                {showStatus ? <th className="th">Status</th> : <th className="th">Method</th>}
+                <th className="th text-right">Total</th>
+              </tr>
+            </thead>
         <tbody>
           {sales.slice(0, 50).map((s) => (
             <tr key={s.id}>
@@ -389,6 +394,7 @@ function SalesTable({ sales, showStatus }: { sales: Sale[]; showStatus?: boolean
           ))}
         </tbody>
       </table>
+      </div>
       {sales.length > 50 && <p className="text-xs text-slate-500 mt-2">Showing first 50 of {sales.length}</p>}
     </>
   )
