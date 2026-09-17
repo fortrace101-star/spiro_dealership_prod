@@ -31,8 +31,22 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // Error handler
+// Connection-level failures (PostgreSQL down / refused / reset) are environmental
+// and retryable, so they are reported as 503 with an actionable message rather
+// than an opaque 500. The real error is always logged.
+const DB_DOWN_CODES = new Set([
+  'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EPIPE', 'EHOSTUNREACH',
+  '57P01', '57P02', '57P03', '08000', '08001', '08003', '08004', '08006', '08007', '08P01',
+]);
+
 app.use((err, req, res, next) => {
-  console.error('[error]', err.message);
+  const detail = err?.message || String(err) || '(no error message)';
+  console.error(`[error] ${req.method} ${req.originalUrl} → ${detail}${err?.code ? ` (code ${err.code})` : ''}`);
+  if (err?.stack) console.error(err.stack);
+
+  if (DB_DOWN_CODES.has(err?.code)) {
+    return res.status(503).json({ error: 'Database unavailable — check that PostgreSQL is running and DATABASE_URL is correct' });
+  }
   res.status(500).json({ error: 'Internal server error' });
 });
 

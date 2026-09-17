@@ -108,7 +108,7 @@ async function pullChanges(): Promise<void> {
   const res = cursor === 0 ? await api.bootstrap() : await api.changes(cursor)
   // The server also sends every sellable id, so local rows it no longer has
   // (deleted product, sold bike, reset dataset) stop being sold here.
-  await saveCatalog(res.products, res.bikes, res.categories, { productIds: res.product_ids, bikeIds: res.bike_ids })
+  await saveCatalog(res.products, res.bikes, res.categories)
   await setSetting('sync_cursor', res.cursor)
 }
 

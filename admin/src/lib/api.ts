@@ -3,7 +3,7 @@ import type {
   Sale, SaleItem, StockMovement, TodayReport, HourlyPoint, User, VinLookupResult,
 } from './types'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000'
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:4000').replace(/\/+$/, '')
 const TOKEN_KEY = 'spiro_admin_token'
 const USER_KEY = 'spiro_admin_user'
 

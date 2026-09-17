@@ -1,6 +1,6 @@
 import type { Bike, Product, SessionUser } from './types'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000'
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:4000').replace(/\/+$/, '')
 const TOKEN_KEY = 'spiro_pos_token'
 const USER_KEY = 'spiro_pos_user'
 const DEVICE_KEY = 'spiro_pos_device_id'

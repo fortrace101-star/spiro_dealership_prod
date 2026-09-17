@@ -36,7 +36,16 @@ export default function POSScreen() {
       .catch(() => setCanReceive(false))
   }, [])
 
-  const categories = useLiveQuery(() => db.categories.toArray(), [])
+  const categories = useLiveQuery(
+    () =>
+      Promise.all([db.products.toArray(), db.categories.toArray()]).then(([products, dbCategories]) => {
+        const catSet = new Set<string>()
+        for (const p of products) catSet.add(p.category)
+        for (const c of dbCategories) if (typeof c === 'string') catSet.add(c)
+        return Array.from(catSet).sort()
+      }),
+    [],
+  )
   const products = useLiveQuery(() => db.products.toArray(), [])
   const bikes = useLiveQuery(() => db.bikes.where('status').equals('in_stock').toArray(), [])
   const todays = useLiveQuery(() => getTodaySales(), [])
