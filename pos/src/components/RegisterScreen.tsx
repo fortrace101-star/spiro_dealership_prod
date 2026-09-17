@@ -17,7 +17,7 @@ export default function RegisterScreen({ onAuthenticated }: { onAuthenticated: (
     try {
       const res =
         mode === 'register'
-          ? await api.register({ code: code.trim(), full_name: fullName.trim(), password, device_id: getDeviceId() })
+          ? await api.register({ code: code.trim(), full_name: fullName.trim(), email: email.trim(), password, device_id: getDeviceId() })
           : await api.login(email.trim(), password)
       setSession(res.token, res.user)
       onAuthenticated()
@@ -56,6 +56,11 @@ export default function RegisterScreen({ onAuthenticated }: { onAuthenticated: (
               <div>
                 <label className="text-xs font-medium text-slate-400 mb-1.5 block">Your full name</label>
                 <input className="input" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Grace Amina" required />
+              </div>
+              <div>
+                <label htmlFor="activation-email" className="text-xs font-medium text-slate-400 mb-1.5 block">Email</label>
+                <input id="activation-email" name="email" className="input" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="grace@example.com" required />
+                <p className="text-xs text-slate-500 mt-1">Use this email to sign in after activation.</p>
               </div>
               <div>
                 <label className="text-xs font-medium text-slate-400 mb-1.5 block">Choose a password</label>

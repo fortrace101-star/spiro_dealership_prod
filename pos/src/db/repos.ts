@@ -3,10 +3,22 @@ import { db } from './database'
 import type { Bike, LocalSale, LocalSaleItem, Product, SyncQueueEntry } from '../lib/types'
 
 // ---------- Catalog ----------
-export async function saveCatalog(products: Product[], bikes: Bike[], categories: string[]) {
+/**
+ * Store a catalog snapshot. `replace` is used on the first full bootstrap, where
+ * the server response IS the whole sellable catalog: anything absent has been
+ * removed server-side (e.g. a data reset) and must stop being sellable locally,
+ * otherwise the terminal keeps selling products the server can no longer match.
+ */
+export async function saveCatalog(products: Product[], bikes: Bike[], categories: string[], opts: { replace?: boolean } = {}) {
   await db.transaction('rw', db.products, db.bikes, db.categories, async () => {
     if (products.length) await db.products.bulkPut(products)
     if (bikes.length) await db.bikes.bulkPut(bikes)
+    if (opts.replace) {
+      const keepProducts = new Set(products.map((p) => p.id))
+      const keepBikes = new Set(bikes.map((b) => b.id))
+      await db.products.filter((p) => !keepProducts.has(p.id)).delete()
+      await db.bikes.filter((b) => !keepBikes.has(b.id)).delete()
+    }
     await db.categories.clear()
     if (categories.length) await db.categories.bulkAdd(categories)
   })

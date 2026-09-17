@@ -2,12 +2,16 @@
 
 export type Role = 'admin' | 'manager' | 'cashier' | 'mechanic'
 
+/** Extra POS capabilities that can be granted on an activation code */
+export type PosPermission = 'inventory_entry'
+
 export interface User {
   id: string
   full_name: string
   email: string | null
   phone: string | null
   role: Role
+  permissions?: PosPermission[]
   is_active: boolean
   last_login_at?: string
   created_at?: string
@@ -115,6 +119,7 @@ export interface ActivationCode {
   code: string
   label: string | null
   role: Role
+  permissions?: PosPermission[]
   created_by_name?: string | null
   claimed_by_name?: string | null
   used_at: string | null
@@ -195,6 +200,29 @@ export interface RangeReport {
     stock_value: number
   }
   daily: { day: string; revenue: string | number; profit: string | number }[]
+}
+
+export interface PurchasingListItem {
+  product_id: string
+  sku: string
+  name: string
+  qty: number
+  unit_cost: number
+  reorder_level: number
+}
+
+export interface PurchasingRecord {
+  id: string
+  client_txn_id: string
+  reference?: string
+  title?: string
+  supplier?: string | null
+  delivery_cost?: string | number
+  items_total?: string | number
+  items: PurchasingListItem[]
+  notes: string | null
+  created_by_name?: string
+  created_at: string
 }
 
 export interface VinLookupResult {

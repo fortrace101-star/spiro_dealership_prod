@@ -1,24 +1,34 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { dateTime, num, PAYMENT_LABELS, ugx } from '../lib/format'
+import { PERIODS } from '../lib/periods'
+import type { Period } from '../lib/periods'
 import type { Sale, SaleItem } from '../lib/types'
 import { Badge, EmptyState, PageHeader, Spinner } from '../components/ui'
+import { PeriodPicker } from '../components/PeriodPicker'
 
 export default function SalesPage() {
   const [sales, setSales] = useState<Sale[] | null>(null)
   const [q, setQ] = useState('')
-  const [days, setDays] = useState('30')
+  const [period, setPeriod] = useState<Period>(PERIODS[0]) // Today by default
   const [payment, setPayment] = useState('')
   const [detail, setDetail] = useState<{ sale: Sale; items: SaleItem[] } | null>(null)
 
   const load = useCallback(async () => {
     const params = new URLSearchParams()
     if (q) params.set('q', q)
-    if (days) params.set('days', days)
+    if (period.from && period.to) {
+      // pad `to` to the end of that day so the whole “to” date is included
+      const to = new Date(`${period.to}T23:59:59`)
+      params.set('from', new Date(`${period.from}T00:00:00`).toISOString())
+      params.set('to', to.toISOString())
+    } else if (period.days) {
+      params.set('days', String(period.days))
+    }
     if (payment) params.set('payment', payment)
     const r = await api.sales(params.toString())
     setSales(r.sales)
-  }, [q, days, payment])
+  }, [q, period, payment])
 
   useEffect(() => {
     load().catch(() => setSales([]))
@@ -33,23 +43,18 @@ export default function SalesPage() {
     <div>
       <PageHeader title="Sales" subtitle="Every transaction across the dealership" />
 
-      <div className="card p-4 mb-4 flex flex-wrap gap-3 items-center">
-        <input className="input max-w-xs" placeholder="Search receipt, cashier, customer…" value={q} onChange={(e) => setQ(e.target.value)} />
-        <select className="input max-w-[160px]" value={days} onChange={(e) => setDays(e.target.value)}>
-          <option value="1">Today</option>
-          <option value="7">Last 7 days</option>
-          <option value="30">Last 30 days</option>
-          <option value="90">Last 90 days</option>
-          <option value="">All time</option>
-          <option value="2">Last 2 days</option>
-        </select>
-        <select className="input max-w-[180px]" value={payment} onChange={(e) => setPayment(e.target.value)}>
-          <option value="">All payments</option>
-          {Object.entries(PAYMENT_LABELS).map(([k, v]) => (
-            <option key={k} value={k}>{v}</option>
-          ))}
-        </select>
-        {sales && <span className="text-sm text-slate-500 ml-auto">{sales.length} transactions</span>}
+      <div className="card p-4 mb-4 space-y-3">
+        <PeriodPicker period={period} onChange={setPeriod} />
+        <div className="flex flex-wrap gap-3 items-center">
+          <input className="input max-w-xs" placeholder="Search receipt, cashier, customer…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <select className="input max-w-[180px]" value={payment} onChange={(e) => setPayment(e.target.value)}>
+            <option value="">All payments</option>
+            {Object.entries(PAYMENT_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>{v}</option>
+            ))}
+          </select>
+          {sales && <span className="text-sm text-slate-500 ml-auto">{sales.length} transactions</span>}
+        </div>
       </div>
 
       <div className="card overflow-hidden">

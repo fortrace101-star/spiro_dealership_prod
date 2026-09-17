@@ -1,13 +1,20 @@
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { canAccess } from '../lib/access'
 import { usePush } from '../hooks/usePush'
+import { api } from '../lib/api'
+import { ugx } from '../lib/format'
+import { Modal } from './Modal'
 import { cn } from '../lib/cn'
+
+interface Toast { id: number; title: string; body: string }
 
 const NAV = [
   { to: '/', label: 'Overview', icon: 'M3 12l9-8 9 8M5 10v10a1 1 0 001 1h4v-6h4v6h4a1 1 0 001-1V10' },
   { to: '/sales', label: 'Sales', icon: 'M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.3 2.3A1 1 0 005.4 17H17M9 21a1 1 0 100-2 1 1 0 000 2zm8 0a1 1 0 100-2 1 1 0 000 2z' },
   { to: '/inventory', label: 'Inventory', icon: 'M20 7l-8-4-8 4v10l8 4 8-4V7zM4 7l8 4m0 0l8-4m-8 4v10' },
+  { to: '/purchasing', label: 'Purchasing', icon: 'M9 17V7m4 10V4m4 13v-6M5 21h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2z' },
   { to: '/bikes', label: 'Bikes / VIN', icon: 'M13 10V3L4 14h7v7l9-11h-7z' },
   { to: '/customers', label: 'Customers', icon: 'M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zm14 10v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75' },
   { to: '/team', label: 'Team & Codes', icon: 'M12 4.35a4 4 0 100 6.3 4 4 0 000-6.3zM5 21v-2a6 6 0 0114 0v2' },
@@ -20,6 +27,41 @@ export default function Layout() {
   const { user, logout } = useAuth()
   const push = usePush()
   const navigate = useNavigate()
+  const [showWipe, setShowWipe] = useState(false)
+  const [wipeConfirm, setWipeConfirm] = useState('')
+  const [wiping, setWiping] = useState(false)
+  const [wipeError, setWipeError] = useState('')
+  const [toasts, setToasts] = useState<Toast[]>([])
+
+  // In-app toast when a push arrives (e.g. a POS sale) while the dashboard is open
+  useEffect(() => {
+    function onMessage(e: MessageEvent) {
+      const payload = e.data?.payload
+      if (e.data?.type !== 'PUSH' || !payload) return
+      const isSale = payload.receiptNo || payload.title?.includes('Sale')
+      const t: Toast = { id: Date.now(), title: payload.title || 'Spiro', body: payload.body || '' }
+      setToasts((prev) => [...prev.slice(-2), t])
+      if (isSale) console.log(`[sale] ${payload.receiptNo || ''} ${ugx(Number(payload.total) || 0)} via ${payload.paymentMethod || '—'}`)
+      setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== t.id)), 8000)
+    }
+    navigator.serviceWorker?.addEventListener('message', onMessage)
+    return () => navigator.serviceWorker?.removeEventListener('message', onMessage)
+  }, [])
+
+  async function doWipe() {
+    setWiping(true)
+    setWipeError('')
+    try {
+      await api.devWipe()
+      setShowWipe(false)
+      setWipeConfirm('')
+      window.location.href = '/login' // fresh state after wipe
+    } catch (err) {
+      setWipeError(err instanceof Error ? err.message : 'Wipe failed')
+    } finally {
+      setWiping(false)
+    }
+  }
 
   return (
     <div className="h-full flex">
@@ -55,7 +97,7 @@ export default function Layout() {
           ))}
         </nav>
 
-        <div className="p-3 border-t border-slate-800/70">
+        <div className="p-3 border-t border-slate-800/70 space-y-2">
           {push.state === 'subscribed' ? (
             <div className="flex items-center gap-2 px-3 py-2 text-xs text-brand-300">
               <span className="h-2 w-2 rounded-full bg-brand-400 animate-pulse" />
@@ -66,6 +108,13 @@ export default function Layout() {
               🔔 Enable sale alerts
             </button>
           )}
+          {/* DEV ONLY — remove before production */}
+          <button
+            onClick={() => setShowWipe(true)}
+            className="w-full text-xs px-3 py-2 rounded-lg border border-amber-500/30 text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 transition"
+          >
+            🧹 Dev: reset all data
+          </button>
         </div>
       </aside>
 
@@ -94,6 +143,47 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+
+      {/* Sale / push toasts */}
+      <div className="fixed bottom-4 right-4 z-[60] space-y-2 w-80">
+        {toasts.map((t) => (
+          <div key={t.id} className="card p-4 border-brand-500/40 bg-[#12161d] shadow-xl animate-pulse">
+            <div className="text-sm font-semibold text-white">{t.title}</div>
+            <div className="text-xs text-slate-400 mt-0.5">{t.body}</div>
+          </div>
+        ))}
+      </div>
+
+      {showWipe && (
+        <Modal title="⚠️ Wipe all data?" onClose={() => setShowWipe(false)}>
+          <p className="text-sm text-slate-400 mb-3">
+            This permanently deletes <span className="text-white font-semibold">every sale, product, bike, customer,
+            activation code, staff account (except you), approval and audit entry</span> from the database.
+            There is no undo. You will stay signed in.
+          </p>
+          <p className="text-sm text-slate-400 mb-3">
+            Type <code className="text-amber-300 font-mono font-bold">WIPE</code> to confirm:
+          </p>
+          <input
+            className="input mb-3"
+            value={wipeConfirm}
+            onChange={(e) => setWipeConfirm(e.target.value)}
+            placeholder="WIPE"
+            autoFocus
+          />
+          {wipeError && <p className="text-sm text-red-400 mb-3">{wipeError}</p>}
+          <div className="flex justify-end gap-2">
+            <button className="btn-ghost" onClick={() => setShowWipe(false)}>Cancel</button>
+            <button
+              className="btn-danger"
+              disabled={wipeConfirm !== 'WIPE' || wiping}
+              onClick={doWipe}
+            >
+              {wiping ? 'Wiping…' : 'Erase everything'}
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

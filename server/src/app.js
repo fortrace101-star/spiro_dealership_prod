@@ -17,6 +17,7 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/admin/sales', require('./routes/adminSales'));
 app.use('/api/pos', require('./routes/pos'));
+app.use('/api/purchasing', require('./routes/purchasing'));
 app.use('/api/sync', require('./routes/sync'));
 app.use('/api/push', require('./routes/push'));
 app.use('/api/reports', require('./routes/reports'));

@@ -5,7 +5,7 @@ const { jwtSecret } = require('./config');
 
 function signToken(user) {
   return jwt.sign(
-    { sub: user.id, role: user.role, name: user.full_name },
+    { sub: user.id, role: user.role, name: user.full_name, permissions: user.permissions || [] },
     jwtSecret,
     { expiresIn: '30d' }
   );
@@ -31,7 +31,7 @@ async function verifyPassword(plain, hash) {
 async function getUserFromToken(token) {
   const payload = verifyToken(token);
   if (!payload) return null;
-  return one(`SELECT id, full_name, email, phone, role, is_active FROM users WHERE id = $1`, [payload.sub]);
+  return one(`SELECT id, full_name, email, phone, role, permissions, is_active FROM users WHERE id = $1`, [payload.sub]);
 }
 
 module.exports = { signToken, verifyToken, hashPassword, verifyPassword, getUserFromToken };

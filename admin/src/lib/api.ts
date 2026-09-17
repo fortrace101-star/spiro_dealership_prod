@@ -1,5 +1,5 @@
 import type {
-  ActivationCode, Approval, AuditEntry, Bike, Customer, CustomerBikeLink, Product, RangeReport,
+  ActivationCode, Approval, AuditEntry, Bike, Customer, CustomerBikeLink, Product, PurchasingRecord, RangeReport,
   Sale, SaleItem, StockMovement, TodayReport, HourlyPoint, User, VinLookupResult,
 } from './types'
 
@@ -67,19 +67,53 @@ export const api = {
   changePassword: (current: string, next: string) =>
     request<{ ok: boolean }>('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ current, next }) }),
 
-  // reports
+  // reports — window helpers accept preset days OR explicit from/to ISO dates
   today: () => request<TodayReport>('/api/reports/today'),
   hourly: () => request<{ series: HourlyPoint[] }>('/api/reports/today/hourly'),
-  range: (days: number) => request<RangeReport>(`/api/reports/range?days=${days}`),
-  topProducts: (days = 30, order = 'revenue') =>
-    request<{ products: { name: string; qty: number; revenue: string | number; profit: string | number }[] }>(
-      `/api/reports/top-products?days=${days}&order=${order}`,
-    ),
-  payments: (days = 30) => request<{ payments: { payment_method: string; amount: string | number }[] }>(`/api/reports/payments?days=${days}`),
-  cashiers: (days = 30) =>
-    request<{ cashiers: { id: string; full_name: string; sales_count: number; revenue: string | number; profit: string | number; discounts: string | number }[] }>(
-      `/api/reports/cashiers?days=${days}`,
-    ),
+  range: (days: number, opts?: { from?: string; to?: string }) => {
+    const qs = new URLSearchParams()
+    if (opts?.from && opts?.to) {
+      qs.set('from', opts.from)
+      qs.set('to', opts.to)
+    } else {
+      qs.set('days', String(days))
+    }
+    return request<RangeReport>(`/api/reports/range?${qs.toString()}`)
+  },
+  topProducts: (days = 30, order = 'revenue', opts?: { from?: string; to?: string }) => {
+    const qs = new URLSearchParams({ order })
+    if (opts?.from && opts?.to) {
+      qs.set('from', opts.from)
+      qs.set('to', opts.to)
+    } else {
+      qs.set('days', String(days))
+    }
+    return request<{ products: { name: string; qty: number; revenue: string | number; profit: string | number }[] }>(
+      `/api/reports/top-products?${qs.toString()}`,
+    )
+  },
+  payments: (days = 30, opts?: { from?: string; to?: string }) => {
+    const qs = new URLSearchParams()
+    if (opts?.from && opts?.to) {
+      qs.set('from', opts.from)
+      qs.set('to', opts.to)
+    } else {
+      qs.set('days', String(days))
+    }
+    return request<{ payments: { payment_method: string; amount: string | number }[] }>(`/api/reports/payments?${qs.toString()}`)
+  },
+  cashiers: (days = 30, opts?: { from?: string; to?: string }) => {
+    const qs = new URLSearchParams()
+    if (opts?.from && opts?.to) {
+      qs.set('from', opts.from)
+      qs.set('to', opts.to)
+    } else {
+      qs.set('days', String(days))
+    }
+    return request<{ cashiers: { id: string; full_name: string; sales_count: number; revenue: string | number; profit: string | number; discounts: string | number }[] }>(
+      `/api/reports/cashiers?${qs.toString()}`,
+    )
+  },
   lowStock: () => request<{ products: Product[] }>('/api/reports/low-stock'),
 
   // sales
@@ -99,6 +133,13 @@ export const api = {
     request<{ movement: StockMovement; stock_qty: number }>('/api/admin/inventory/adjust', { method: 'POST', body: JSON.stringify({ product_id, qty, note, type }) }),
   movements: (productId = '') => request<{ movements: StockMovement[] }>(`/api/admin/inventory/movements?product_id=${productId}`),
 
+  // shared purchasing — admins and managers can prepare and review stock requests
+  purchasingCatalog: () => request<{ products: Product[]; can_receive: boolean }>('/api/purchasing/catalog'),
+  reorders: () => request<{ records: PurchasingRecord[] }>('/api/purchasing/reorders'),
+  consignments: () => request<{ records: PurchasingRecord[] }>('/api/purchasing/consignments'),
+  createReorder: (payload: { title: string; notes: string; client_txn_id: string; items: { product_id: string; qty: number }[] }) =>
+    request<{ record: PurchasingRecord; duplicate: boolean }>('/api/purchasing/reorders', { method: 'POST', body: JSON.stringify(payload) }),
+
   // customers
   customers: (q = '') => request<{ customers: Customer[] }>(`/api/admin/customers?q=${encodeURIComponent(q)}`),
   customer: (id: string) =>
@@ -107,8 +148,16 @@ export const api = {
 
   // controls
   codes: () => request<{ codes: ActivationCode[] }>('/api/admin/codes'),
-  createCode: (label: string, role: string, days = 7) =>
-    request<{ code: ActivationCode }>('/api/admin/codes', { method: 'POST', body: JSON.stringify({ label, role, days }) }),
+  createCode: (label: string, role: string, days = 7, permissions: string[] = []) =>
+    request<{ code: ActivationCode }>('/api/admin/codes', {
+      method: 'POST',
+      body: JSON.stringify({ label, role, days, permissions }),
+    }),
+  devWipe: () =>
+    request<{ ok: boolean }>('/api/admin/dev/wipe', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: 'WIPE' }),
+    }),
   revokeCode: (id: string) => request<{ ok: boolean }>(`/api/admin/codes/${id}`, { method: 'DELETE' }),
   staff: () => request<{ users: User[] }>('/api/auth/staff'),
   updateUser: (id: string, patch: Partial<User>) => request<{ user: User }>(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),

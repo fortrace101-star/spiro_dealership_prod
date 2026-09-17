@@ -16,15 +16,22 @@ self.addEventListener('push', (event) => {
     if (event.data) data.body = event.data.text();
   }
 
+  // Forward to any open dashboard window so it can show an in-app toast
   event.waitUntil(
-    self.registration.showNotification(data.title, {
-      body: data.body,
-      icon: '/logo.png',
-      badge: '/logo.png',
-      tag: data.tag || undefined,
-      data: { url: data.url || '/' },
-      vibrate: [100, 50, 100],
-    }),
+    (async () => {
+      const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of clientList) {
+        client.postMessage({ type: 'PUSH', payload: data });
+      }
+      await self.registration.showNotification(data.title, {
+        body: data.body,
+        icon: '/logo.png',
+        badge: '/logo.png',
+        tag: data.tag || undefined,
+        data: { url: data.url || '/' },
+        vibrate: [100, 50, 100],
+      });
+    })(),
   );
 });
 

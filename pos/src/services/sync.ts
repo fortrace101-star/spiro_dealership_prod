@@ -47,6 +47,7 @@ function update(patch: Partial<SyncStatus>) {
 }
 
 function saleToPayload(sale: LocalSale, items: LocalSaleItem[]) {
+  const costTotal = items.reduce((sum, it) => sum + Number(it.unit_cost || 0) * it.qty, 0)
   return {
     client_txn_id: sale.client_txn_id,
     cashier_id: sale.cashier_id,
@@ -55,6 +56,7 @@ function saleToPayload(sale: LocalSale, items: LocalSaleItem[]) {
     subtotal: sale.subtotal,
     discount: sale.discount,
     total: sale.total,
+    cost_total: Number(costTotal.toFixed(2)),
     payment_method: sale.payment_method,
     amount_paid: sale.amount_paid,
     change_due: sale.change_due,
@@ -104,7 +106,9 @@ async function pushPending(): Promise<void> {
 async function pullChanges(): Promise<void> {
   const cursor = await getSetting<number>('sync_cursor', 0)
   const res = cursor === 0 ? await api.bootstrap() : await api.changes(cursor)
-  await saveCatalog(res.products, res.bikes, res.categories)
+  // The server also sends every sellable id, so local rows it no longer has
+  // (deleted product, sold bike, reset dataset) stop being sold here.
+  await saveCatalog(res.products, res.bikes, res.categories, { productIds: res.product_ids, bikeIds: res.bike_ids })
   await setSetting('sync_cursor', res.cursor)
 }
 

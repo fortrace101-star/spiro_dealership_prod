@@ -1,4 +1,4 @@
-import type { Bike, Product } from './types'
+import type { Bike, Product, SessionUser } from './types'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000'
 const TOKEN_KEY = 'spiro_pos_token'
@@ -16,7 +16,7 @@ export function clearSession() {
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(USER_KEY)
 }
-export function getStoredUser(): { id: string; full_name: string; role: string } | null {
+export function getStoredUser(): SessionUser | null {
   try {
     const raw = localStorage.getItem(USER_KEY)
     return raw ? JSON.parse(raw) : null
@@ -82,17 +82,58 @@ export interface PushResult {
   failed: { client_txn_id: string; error: string }[]
 }
 
+export interface PurchasingProduct {
+  id: string
+  sku: string
+  name: string
+  stock_qty: number
+  reorder_level: number
+  cost_price: string | number
+}
+
+export interface PurchasingItem {
+  product_id: string | null
+  sku: string
+  name: string
+  qty: number
+  unit_cost: number
+  reorder_level: number
+  new_product?: {
+    sku: string
+    name: string
+    barcode: string
+    category: 'Spare part' | 'Accessory' | 'Consumable'
+    selling_price: number
+    min_stock: number
+    reorder_level: number
+  }
+}
+
+export interface PurchasingRecord {
+  id: string
+  client_txn_id: string
+  reference?: string
+  title?: string
+  supplier?: string | null
+  delivery_cost?: string | number
+  items_total?: string | number
+  items: { product_id: string; sku: string; name: string; qty: number; unit_cost: number; reorder_level: number }[]
+  notes: string | null
+  created_by_name?: string
+  created_at: string
+}
+
 export const api = {
   health: () => request<{ ok: boolean }>('/api/health', {}, 5000),
 
   login: (email: string, password: string) =>
-    request<{ token: string; user: { id: string; full_name: string; role: string } }>('/api/auth/login', {
+    request<{ token: string; user: SessionUser }>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
 
-  register: (data: { code: string; full_name: string; password: string; device_id: string }) =>
-    request<{ token: string; user: { id: string; full_name: string; role: string } }>('/api/auth/register', {
+  register: (data: { code: string; full_name: string; email: string; password: string; device_id: string }) =>
+    request<{ token: string; user: SessionUser }>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
@@ -101,4 +142,23 @@ export const api = {
   changes: (since: number) => request<SyncPayload>(`/api/sync/changes?since=${since}`),
   push: (sales: unknown[]) =>
     request<PushResult>('/api/sync/push', { method: 'POST', body: JSON.stringify({ sales }) }),
+
+  purchasingCatalog: () =>
+    request<{ products: PurchasingProduct[]; can_receive: boolean }>('/api/purchasing/catalog'),
+
+  consignments: () => request<{ records: PurchasingRecord[] }>('/api/purchasing/consignments'),
+
+  reorders: () => request<{ records: PurchasingRecord[] }>('/api/purchasing/reorders'),
+
+  createConsignment: (payload: { reference: string; supplier: string; delivery_cost: number; notes: string; client_txn_id: string; items: PurchasingItem[] }) =>
+    request<{ record: PurchasingRecord; duplicate: boolean }>('/api/purchasing/consignments', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  createReorder: (payload: { title: string; notes: string; client_txn_id: string; items: PurchasingItem[] }) =>
+    request<{ record: PurchasingRecord; duplicate: boolean }>('/api/purchasing/reorders', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 }

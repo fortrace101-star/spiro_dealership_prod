@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/database'
 import { createSale, getTodaySales } from '../db/repos'
-import { clearSession, getDeviceId, getStoredUser } from '../lib/api'
+import { api, clearSession, getDeviceId, getStoredUser } from '../lib/api'
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner'
 import { useSyncStatus } from '../hooks/useSyncStatus'
 import { runSyncCycle } from '../services/sync'
@@ -12,6 +12,7 @@ import { ugx } from '../lib/format'
 import CheckoutModal from './CheckoutModal'
 import ReceiptModal from './ReceiptModal'
 import HistoryModal from './HistoryModal'
+import ReceivingScreen from './ReceivingScreen'
 import { cn } from '../lib/cn'
 
 export default function POSScreen() {
@@ -24,7 +25,16 @@ export default function POSScreen() {
   const [showCheckout, setShowCheckout] = useState(false)
   const [receipt, setReceipt] = useState<LocalSale | null>(null)
   const [showHistory, setShowHistory] = useState(false)
+  const [stockMode, setStockMode] = useState<'receive' | 'reorder' | null>(null)
+  const [canReceive, setCanReceive] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
+
+  // Stock-in capability is granted per activation code; admins/managers always have it.
+  useEffect(() => {
+    api.purchasingCatalog()
+      .then((r) => setCanReceive(r.can_receive))
+      .catch(() => setCanReceive(false))
+  }, [])
 
   const categories = useLiveQuery(() => db.categories.toArray(), [])
   const products = useLiveQuery(() => db.products.toArray(), [])
@@ -168,6 +178,8 @@ export default function POSScreen() {
         <div className="ml-auto flex items-center gap-3 text-xs text-slate-400">
           <span>Today: <span className="text-white font-semibold">{todayStats.count}</span> sales · <span className="text-brand-300 font-semibold">{ugx(todayStats.revenue)}</span></span>
           <button className="btn-ghost text-xs" onClick={() => setShowHistory(true)}>History</button>
+          <button className="btn-ghost text-xs" onClick={() => setStockMode('receive')}>Receive stock</button>
+          <button className="btn-ghost text-xs" onClick={() => setStockMode('reorder')}>Reorder list</button>
           <button className="btn-ghost text-xs" onClick={() => void runSyncCycle('manual')} disabled={sync.syncing}>
             {sync.syncing ? 'Syncing…' : 'Sync now'}
           </button>
@@ -332,6 +344,19 @@ export default function POSScreen() {
       {receipt && <ReceiptModal sale={receipt} onClose={() => setReceipt(null)} />}
 
       {showHistory && <HistoryModal onClose={() => setShowHistory(false)} />}
+
+      {stockMode && (
+        <ReceivingScreen
+          mode={stockMode}
+          canReceive={canReceive}
+          onClose={() => setStockMode(null)}
+          onDone={(message) => {
+            setStockMode(null)
+            setFlash(message)
+            void runSyncCycle('manual')
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT,                        -- null until activation
   role TEXT NOT NULL DEFAULT 'cashier'
     CHECK (role IN ('admin','manager','cashier','mechanic')),
+  permissions JSONB NOT NULL DEFAULT '[]'::jsonb,  -- extra capabilities granted via activation code
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   activated_at TIMESTAMPTZ,
   last_login_at TIMESTAMPTZ,
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS activation_codes (
   label TEXT,                                -- e.g. "Kampala Road counter"
   role TEXT NOT NULL DEFAULT 'cashier'
     CHECK (role IN ('manager','cashier','mechanic')),
+  permissions JSONB NOT NULL DEFAULT '[]'::jsonb,  -- extra POS capabilities granted with this code
   created_by UUID REFERENCES users(id),
   claimed_by UUID REFERENCES users(id),
   used_at TIMESTAMPTZ,
@@ -75,6 +77,8 @@ CREATE TABLE IF NOT EXISTS bikes (
 );
 -- Migration for older installs
 ALTER TABLE bikes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE activation_codes ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS customers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -200,3 +204,29 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log (created_at);
+
+-- Incoming deliveries and shared purchasing requests. Items retain a historical snapshot.
+CREATE TABLE IF NOT EXISTS consignments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_txn_id UUID UNIQUE NOT NULL,
+  request_hash TEXT NOT NULL,
+  reference TEXT NOT NULL,
+  supplier TEXT NOT NULL,
+  delivery_cost NUMERIC(12,2) NOT NULL CHECK (delivery_cost >= 0),
+  items_total NUMERIC(12,2) NOT NULL CHECK (items_total >= 0),
+  items JSONB NOT NULL,
+  notes TEXT,
+  created_by UUID NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS reorder_lists (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_txn_id UUID UNIQUE NOT NULL,
+  request_hash TEXT NOT NULL,
+  title TEXT NOT NULL,
+  notes TEXT,
+  items JSONB NOT NULL,
+  created_by UUID NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+

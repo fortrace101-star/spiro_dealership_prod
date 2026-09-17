@@ -7,7 +7,7 @@ router.use(requireAuth);
 
 /** Sales list with cashier/customer names + optional filters */
 router.get('/', async (req, res) => {
-  const { q, days, payment, limit = 100 } = req.query;
+  const { q, days, payment, from, to, limit = 100 } = req.query;
   const params = [];
   let where = `WHERE 1=1`;
 
@@ -15,10 +15,22 @@ router.get('/', async (req, res) => {
     params.push(`%${q}%`);
     where += ` AND (s.receipt_no ILIKE $${params.length} OR COALESCE(c.full_name,'') ILIKE $${params.length} OR COALESCE(u.full_name,'') ILIKE $${params.length})`;
   }
-  if (days) {
+
+  // Date window: explicit from/to instants take precedence over a trailing day count
+  const fromDate = from ? new Date(String(from)) : null;
+  const toDate = to ? new Date(String(to)) : null;
+  if (fromDate && !Number.isNaN(fromDate.getTime())) {
+    params.push(fromDate.toISOString());
+    where += ` AND s.created_at >= $${params.length}`;
+    if (toDate && !Number.isNaN(toDate.getTime())) {
+      params.push(toDate.toISOString());
+      where += ` AND s.created_at <= $${params.length}`;
+    }
+  } else if (days) {
     params.push(String(days));
     where += ` AND s.created_at >= now() - ($${params.length} || ' days')::interval`;
   }
+
   if (payment) {
     params.push(payment);
     where += ` AND s.payment_method = $${params.length}`;

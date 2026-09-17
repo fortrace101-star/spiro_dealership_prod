@@ -1,11 +1,15 @@
 const express = require('express');
 const crypto = require('crypto');
-const { one, many } = require('../db');
+const { one, many, query } = require('../db');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/permissions');
 const { audit } = require('../middleware/audit');
 
 const router = express.Router();
 router.use(requireAuth);
+
+/** Whitelist of POS capabilities that can be granted beyond a user's role. */
+const POS_PERMISSIONS = ['inventory_entry'];
 
 // ---------- Activation codes (admin) ----------
 router.get('/codes', requireRole(), async (req, res) => {
@@ -20,12 +24,15 @@ router.get('/codes', requireRole(), async (req, res) => {
 });
 
 router.post('/codes', requireRole(), async (req, res) => {
-  const { label, role = 'cashier', days = 7 } = req.body || {};
+  const { label, role = 'cashier', days = 7, permissions } = req.body || {};
   const code = 'SPIRO-' + crypto.randomBytes(3).toString('hex').toUpperCase();
+  // Whitelist of grantable POS permissions (extra capabilities beyond the role).
+  const allowed = POS_PERMISSIONS;
+  const perms = Array.isArray(permissions) ? permissions.filter((p) => allowed.includes(p)) : [];
   const rec = await one(
-    `INSERT INTO activation_codes (code, label, role, created_by, expires_at)
-     VALUES ($1,$2,$3,$4, now() + ($5 || ' days')::interval) RETURNING *`,
-    [code, label || null, ['manager', 'cashier', 'mechanic'].includes(role) ? role : 'cashier', req.user.id, String(days)]
+    `INSERT INTO activation_codes (code, label, role, permissions, created_by, expires_at)
+     VALUES ($1,$2,$3,$4,$5, now() + ($6 || ' days')::interval) RETURNING *`,
+    [code, label || null, ['manager', 'cashier', 'mechanic'].includes(role) ? role : 'cashier', JSON.stringify(perms), req.user.id, String(days)]
   );
   await audit({ userId: req.user.id, action: 'create_code', entity: 'activation_code', entityId: rec.id, newValue: rec });
   res.status(201).json({ code: rec });
@@ -40,22 +47,35 @@ router.delete('/codes/:id', requireRole(), async (req, res) => {
 
 // ---------- Users (admin) ----------
 router.patch('/users/:id', requireRole(), async (req, res) => {
-  const { is_active, role } = req.body || {};
+  const { is_active, role, permissions } = req.body || {};
   const before = await one(`SELECT * FROM users WHERE id = $1`, [req.params.id]);
   if (!before) return res.status(404).json({ error: 'User not found' });
+
+  // An existing operator can be granted or stripped of POS capabilities without a
+  // new activation code. Only whitelisted values are stored, deduped and bounded.
+  let perms = null;
+  if (permissions !== undefined) {
+    if (!Array.isArray(permissions) || permissions.length > POS_PERMISSIONS.length + 5) {
+      return res.status(400).json({ error: 'permissions must be a list of known capabilities' });
+    }
+    perms = [...new Set(permissions.filter((p) => POS_PERMISSIONS.includes(p)))];
+  }
 
   const user = await one(
     `UPDATE users SET
        is_active = COALESCE($2, is_active),
-       role = COALESCE($3, role)
-     WHERE id = $1 RETURNING id, full_name, email, phone, role, is_active`,
-    [req.params.id, is_active ?? null, role ?? null]
+       role = COALESCE($3, role),
+       permissions = COALESCE($4, permissions)
+     WHERE id = $1 RETURNING id, full_name, email, phone, role, permissions, is_active`,
+    [req.params.id, is_active ?? null, role ?? null, perms ? JSON.stringify(perms) : null]
   );
   await audit({ userId: req.user.id, action: 'update_user', entity: 'user', entityId: user.id, oldValue: before, newValue: user });
   res.json({ user });
 });
 
 // ---------- Products (admin) ----------
+// Write routes require the inventory_entry permission (admins/managers pass
+// implicitly; other roles must have been granted it via their activation code).
 router.get('/products', async (req, res) => {
   const { q, low_stock } = req.query;
   const params = [];
@@ -71,7 +91,7 @@ router.get('/products', async (req, res) => {
   res.json({ products });
 });
 
-router.post('/products', requireRole(), async (req, res) => {
+router.post('/products', requireRole(), requirePermission('inventory_entry'), async (req, res) => {
   try {
     const p = req.body || {};
     if (!p.sku || !p.name) return res.status(400).json({ error: 'sku and name required' });
@@ -94,7 +114,7 @@ router.post('/products', requireRole(), async (req, res) => {
   }
 });
 
-router.put('/products/:id', requireRole(), async (req, res) => {
+router.put('/products/:id', requireRole(), requirePermission('inventory_entry'), async (req, res) => {
   const before = await one(`SELECT * FROM products WHERE id = $1`, [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Product not found' });
   const p = { ...before, ...req.body };
@@ -235,7 +255,7 @@ router.get('/customers/:id', async (req, res) => {
 });
 
 // ---------- Inventory adjustments (admin/manager) ----------
-router.post('/inventory/adjust', requireRole(), async (req, res) => {
+router.post('/inventory/adjust', requireRole(), requirePermission('inventory_entry'), async (req, res) => {
   const { product_id, qty, note, type = 'adjustment' } = req.body || {};
   const product = await one(`SELECT * FROM products WHERE id = $1`, [product_id]);
   if (!product) return res.status(404).json({ error: 'Product not found' });
@@ -301,6 +321,48 @@ router.post('/approvals/:id/decide', requireRole(), async (req, res) => {
   if (!rec) return res.status(400).json({ error: 'Approval not found or already decided' });
   await audit({ userId: req.user.id, action: `approval_${decision}`, entity: 'approval', entityId: rec.id, newValue: rec });
   res.json({ approval: rec });
+});
+
+// ---------- DEV ONLY: wipe all transactional + demo data ----------
+// Used by the "Dev: reset data" button in the admin sidebar while testing.
+// Admin-only, requires an explicit confirm flag, and keeps the calling admin
+// logged in (their user row and their push subscription survive the wipe).
+router.post('/dev/wipe', requireRole(), async (req, res) => {
+  if (req.body?.confirm !== 'WIPE') {
+    return res.status(400).json({ error: 'Send { confirm: "WIPE" } to confirm data erasure' });
+  }
+
+  try {
+    // Quote identifiers — TRUNCATE takes a list, not parameters.
+    await query(
+      `TRUNCATE audit_log, push_subscriptions, stock_movements, sale_items, sales,
+              approvals, customer_bikes, activation_codes
+       RESTART IDENTITY CASCADE`
+    );
+
+    // Bikes reference customers → clear the link, then delete both.
+    await query(`UPDATE bikes SET customer_id = NULL`);
+    await query(`DELETE FROM bikes`);
+    await query(`DELETE FROM products`);
+    await query(`DELETE FROM customers`);
+
+    // Keep the caller (the admin using the button) but drop every other account.
+    await query(`DELETE FROM users WHERE id <> $1`, [req.user.id]);
+
+    await audit({
+      userId: req.user.id,
+      action: 'dev_wipe_database',
+      entity: 'database',
+      entityId: null,
+      meta: { at: new Date().toISOString() },
+    });
+
+    console.log(`[dev] database wiped by ${req.user.full_name} (${req.user.email}) at ${new Date().toISOString()}`);
+    res.json({ ok: true, wiped: true, kept_user: req.user.id });
+  } catch (err) {
+    console.error('[dev/wipe] failed:', err.message);
+    res.status(500).json({ error: 'Wipe failed: ' + err.message });
+  }
 });
 
 // ---------- Audit log (admin) ----------

@@ -86,6 +86,7 @@ export interface SessionUser {
   id: string
   full_name: string
   role: string
+  permissions?: string[]
 }
 
 export interface SyncQueueEntry {

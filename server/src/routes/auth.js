@@ -9,9 +9,13 @@ const router = express.Router();
 /** POS operator self-registration using an admin-generated code */
 router.post('/register', async (req, res) => {
   try {
-    const { code, full_name, email, phone, password, device_id } = req.body || {};
-    if (!code || !full_name || !password) {
-      return res.status(400).json({ error: 'code, full_name and password are required' });
+    const { code, full_name, email: rawEmail, phone, password, device_id } = req.body || {};
+    const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
+    if (!code || !full_name || !password || !email) {
+      return res.status(400).json({ error: 'code, full_name, email and password are required' });
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Enter a valid email address' });
     }
     if (String(password).length < 6) {
       return res.status(400).json({ error: 'Password must be at least 6 characters' });
@@ -25,24 +29,22 @@ router.post('/register', async (req, res) => {
     );
     if (!rec) return res.status(400).json({ error: 'Invalid, expired, or already used code' });
 
-    const existingEmail = email
-      ? await one(`SELECT id FROM users WHERE lower(email) = lower($1)`, [email])
-      : null;
+    const existingEmail = await one(`SELECT id FROM users WHERE lower(email) = lower($1)`, [email]);
     if (existingEmail) return res.status(409).json({ error: 'Email already registered' });
 
     const password_hash = await hashPassword(password);
     const user = await one(
-      `INSERT INTO users (full_name, email, phone, password_hash, role, activated_at, last_login_at)
-       VALUES ($1,$2,$3,$4,$5, now(), now()) RETURNING *`,
-      [full_name, email || null, phone || null, password_hash, rec.role]
+      `INSERT INTO users (full_name, email, phone, password_hash, role, permissions, activated_at, last_login_at)
+       VALUES ($1,$2,$3,$4,$5,$6, now(), now()) RETURNING *`,
+      [full_name, email, phone || null, password_hash, rec.role, JSON.stringify(rec.permissions || [])]
     );
 
     await one(`UPDATE activation_codes SET used_at = now(), claimed_by = $1 WHERE id = $2`, [user.id, rec.id]);
-    await audit({ userId: user.id, action: 'register', entity: 'user', entityId: user.id, meta: { code: rec.code, role: rec.role, device_id } });
+    await audit({ userId: user.id, action: 'register', entity: 'user', entityId: user.id, meta: { code: rec.code, role: rec.role, permissions: rec.permissions || [], device_id } });
 
     res.status(201).json({
       token: signToken(user),
-      user: { id: user.id, full_name: user.full_name, email: user.email, role: user.role },
+      user: { id: user.id, full_name: user.full_name, email: user.email, role: user.role, permissions: user.permissions || [] },
     });
   } catch (err) {
     console.error('[auth/register]', err);

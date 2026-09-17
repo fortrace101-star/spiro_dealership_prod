@@ -1,6 +1,7 @@
 const express = require('express');
 const { one, many } = require('../db');
 const { requireAuth } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/permissions');
 const { recordSale } = require('../services/sales');
 
 const router = express.Router();

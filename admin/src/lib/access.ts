@@ -10,6 +10,7 @@ const ROUTE_ROLES: { path: string; roles: Role[] }[] = [
   { path: '/approvals', roles: ['admin', 'manager'] },
   { path: '/sales', roles: ['admin', 'manager', 'cashier'] },
   { path: '/inventory', roles: ['admin', 'manager', 'mechanic'] },
+  { path: '/purchasing', roles: ['admin', 'manager'] },
 ]
 
 export function canAccess(role: Role, pathname: string): boolean {

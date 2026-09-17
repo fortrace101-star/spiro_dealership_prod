@@ -16,6 +16,7 @@ async function recordSale(input, actor) {
       await client.query('COMMIT');
       const sale = existing.rows[0];
       const items = await client.query(`SELECT * FROM sale_items WHERE sale_id = $1`, [sale.id]);
+      console.log(`[sale] DUPLICATE ignored: ${sale.receipt_no || sale.client_txn_id} total=${Number(sale.total).toLocaleString('en-UG')} — already recorded, no changes made`);
       return { sale, items: items.rows, duplicate: true };
     }
 
@@ -42,8 +43,25 @@ async function recordSale(input, actor) {
       }
     }
 
+    // ---- Item references come from a catalog snapshot the client may have taken
+    // before the server data changed (data reset, deleted product, part created
+    // offline). A completed sale must still be recorded, so references the server
+    // does not know are stored as NULL instead of failing the foreign key forever.
+    const itemList = Array.isArray(input.items) ? input.items : [];
+    const isUuid = (v) => typeof v === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(v);
+    const productIds = [...new Set(itemList.map((it) => it.product_id).filter(isUuid))];
+    const bikeIds = [...new Set(itemList.map((it) => it.bike_id).filter(isUuid).concat(isUuid(input.bike_id) ? [input.bike_id] : []))];
+    const knownProducts = productIds.length
+      ? new Set((await client.query(`SELECT id FROM products WHERE id = ANY($1::uuid[])`, [productIds])).rows.map((r) => r.id))
+      : new Set();
+    const knownBikes = bikeIds.length
+      ? new Set((await client.query(`SELECT id FROM bikes WHERE id = ANY($1::uuid[])`, [bikeIds])).rows.map((r) => r.id))
+      : new Set();
+    const knownProduct = (id) => (isUuid(id) && knownProducts.has(id) ? id : null);
+    const knownBike = (id) => (isUuid(id) && knownBikes.has(id) ? id : null);
+
     // ---- Derive bike link when the client only set it on items ----
-    const bikeId = input.bike_id || (input.items || []).find((it) => it.kind === 'bike' && it.bike_id)?.bike_id || null;
+    const bikeId = knownBike(input.bike_id || itemList.find((it) => it.kind === 'bike' && it.bike_id)?.bike_id || null);
 
     // ---- Totals ----
     const subtotal = Number(input.subtotal || 0);
@@ -71,32 +89,37 @@ async function recordSale(input, actor) {
 
     // ---- Items + stock deduction as movements ----
     const items = [];
-    for (const it of input.items || []) {
+    for (const it of itemList) {
+      const productRef = knownProduct(it.product_id);
+      const bikeRef = knownBike(it.bike_id);
+      if ((it.product_id && !productRef) || (it.bike_id && !bikeRef)) {
+        console.warn(`[sale] ${receiptNo}: "${it.name}" references an item the server does not have — recorded without a stock link`);
+      }
       const itemRes = await client.query(
         `INSERT INTO sale_items
            (sale_id, product_id, bike_id, name, kind, qty, unit_price, unit_cost, discount, line_total)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
         [
-          sale.id, it.product_id || null, it.bike_id || null, it.name, it.kind || 'part',
+          sale.id, productRef, bikeRef, it.name, it.kind || 'part',
           it.qty, it.unit_price, it.unit_cost || 0, it.discount || 0, it.line_total,
         ]
       );
       items.push(itemRes.rows[0]);
 
-      if (it.kind === 'bike' && it.bike_id) {
+      if (it.kind === 'bike' && bikeRef) {
         // Bike leaves inventory: mark sold, assign customer
         await client.query(
           `UPDATE bikes
               SET status = 'sold', sold_at = COALESCE($2, now()), sold_price = $3, customer_id = COALESCE($4, customer_id), updated_at = now()
             WHERE id = $1 AND status <> 'sold'`,
-          [it.bike_id, input.created_at || null, it.unit_price, customerId]
+          [bikeRef, input.created_at || null, it.unit_price, customerId]
         );
-      } else if (it.product_id) {
-        await client.query(`UPDATE products SET stock_qty = stock_qty - $2, updated_at = now() WHERE id = $1`, [it.product_id, it.qty]);
+      } else if (productRef) {
+        await client.query(`UPDATE products SET stock_qty = stock_qty - $2, updated_at = now() WHERE id = $1`, [productRef, it.qty]);
         await client.query(
           `INSERT INTO stock_movements (product_id, qty, type, sale_id, user_id, device_id, client_txn_id, note)
            VALUES ($1, $2, 'sale', $3, $4, $5, $6, $7)`,
-          [it.product_id, -Math.abs(it.qty), sale.id, actor.id, input.device_id || null, input.client_txn_id, `Sale ${receiptNo}`]
+          [productRef, -Math.abs(it.qty), sale.id, actor.id, input.device_id || null, input.client_txn_id, `Sale ${receiptNo}`]
         );
       }
     }
@@ -121,8 +144,11 @@ async function recordSale(input, actor) {
 
     await client.query('COMMIT');
 
-    // ---- Push notifications AFTER commit (DB update happened) ----
+    // ---- Console log + push notifications AFTER commit (DB updated) ----
     const cashierName = actor.full_name || 'Cashier';
+    console.log(
+      `[sale] RECORDED ${sale.receipt_no} | ${cashierName} | UGX ${Number(sale.total).toLocaleString('en-UG', { maximumFractionDigits: 0 })} | ${sale.payment_method}${input.device_id ? ` | device ${input.device_id}` : ''}${(input.items || []).length ? ` | ${input.items.length} item(s)` : ''}`
+    );
     const pushSvc = require('./push');
     setImmediate(() => {
       pushSvc.notifyAdmins(pushSvc.saleNotification({ ...sale, cashier_name: cashierName })).catch(() => {});

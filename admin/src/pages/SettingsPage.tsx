@@ -4,14 +4,17 @@ import {
 } from 'recharts'
 import { api } from '../lib/api'
 import { compactUgx, ugx } from '../lib/format'
+import { PERIODS } from '../lib/periods'
+import type { Period } from '../lib/periods'
 import type { RangeReport } from '../lib/types'
 import { usePush } from '../hooks/usePush'
 import { KpiCard, PageHeader, Spinner } from '../components/ui'
+import { PeriodPicker } from '../components/PeriodPicker'
 import { Field } from './InventoryPage'
 
 export default function SettingsPage() {
   const push = usePush()
-  const [days, setDays] = useState(30)
+  const [period, setPeriod] = useState<Period>(PERIODS[0])
   const [range, setRange] = useState<RangeReport | null>(null)
   const [cashiers, setCashiers] = useState<{ id: string; full_name: string; sales_count: number; revenue: number; profit: number; discounts: number }[]>([])
   const [pwForm, setPwForm] = useState({ current: '', next: '' })
@@ -19,10 +22,17 @@ export default function SettingsPage() {
   const [testSent, setTestSent] = useState(false)
 
   const load = useCallback(async () => {
-    const [r, c] = await Promise.all([api.range(days), api.cashiers(days)])
+    const win = period.from && period.to
+      ? { from: period.from, to: period.to }
+      : undefined
+    const dayCount = period.days ?? 30
+    const [r, c] = await Promise.all([
+      api.range(dayCount, win),
+      api.cashiers(dayCount, win),
+    ])
     setRange(r)
     setCashiers(c.cashiers.map((x) => ({ ...x, revenue: Number(x.revenue), profit: Number(x.profit), discounts: Number(x.discounts) })))
-  }, [days])
+  }, [period])
 
   useEffect(() => {
     load().catch(() => setRange(null))
@@ -51,18 +61,14 @@ export default function SettingsPage() {
       <PageHeader title="Settings & Reports" subtitle="Period reports, staff performance, notifications and security" />
 
       {/* Range selector */}
-      <div className="flex gap-2 mb-4">
-        {[7, 30, 90].map((d) => (
-          <button key={d} onClick={() => setDays(d)} className={days === d ? 'btn-primary text-xs' : 'btn-ghost text-xs'}>
-            Last {d} days
-          </button>
-        ))}
+      <div className="mb-4">
+        <PeriodPicker period={period} onChange={setPeriod} />
       </div>
 
       {range ? (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <KpiCard label="Revenue" value={ugx(range.kpi.revenue)} delta={`${range.kpi.sales_count} transactions`} />
+            <KpiCard label="Revenue" value={ugx(range.kpi.revenue)} delta={`${range.kpi.sales_count} transactions · ${period.label}`} />
             <KpiCard label="Gross profit" value={ugx(range.kpi.profit)} delta={`Avg ${ugx(range.kpi.avg_transaction)}`} />
             <KpiCard label="Bikes sold" value={String(range.kpi.bikes_sold)} delta={`${range.kpi.parts_sold} parts sold`} />
             <KpiCard label="Stock value" value={ugx(range.kpi.stock_value)} delta={`Credit out ${ugx(range.kpi.credit_outstanding)}`} />
