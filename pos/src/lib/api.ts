@@ -93,6 +93,15 @@ export interface PurchasingProduct {
   selling_price: number
 }
 
+/** Per-lifecycle-state counts for reorder list badges.
+ *  pending    = list created but not yet acted on
+ *  processed  = list prepared/sent for ordering
+ *  fulfilled  = stock received against it (no longer counts toward attention)
+ *  cancelled  = shop decided not to order after all */
+export interface ReorderCounts {
+  counts: { pending: number; processed: number; fulfilled: number; cancelled: number }
+}
+
 /** Canonical product categories used across POS + server.
  *
  *  Major sections:
@@ -193,6 +202,11 @@ export const api = {
 
   reorders: () => request<{ records: PurchasingRecord[] }>('/api/purchasing/reorders'),
 
+  // Counts per lifecycle state for badge queries (admin category tabs + POS badge).
+  // Only pending + processed count toward the attention badge; fulfilled lists
+  // (already received) and cancelled lists are excluded from it.
+  reorderCounts: () => request<ReorderCounts>('/api/purchasing/reorders/counts'),
+
   // Server-generated default title for a new reorder list: RL-19-Sep-26-01.
   nextReorderRef: () => request<{ title: string }>('/api/purchasing/reorders/next-ref'),
 
@@ -204,7 +218,7 @@ export const api = {
       body: JSON.stringify({ status }),
     }),
 
-    createConsignment: (payload: {
+  createConsignment: (payload: {
     reference: string
     supplier: string
     delivery_cost: number

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/database'
 import { createSale, getTodaySales } from '../db/repos'
@@ -61,10 +61,14 @@ export default function POSScreen() {
       .catch(() => setCanReceive(false))
     }, [])
 
-  // Count of unfulfilled reorder lists for the notification badge.
+  // Count of pending + processed reorder lists for the notification badge.
+  // Fulfilled (already received) lists are not included; cancelled lists are gone.
   useEffect(() => {
-    api.reorders()
-      .then((r) => setReorderCount(r.records.length))
+    api.reorderCounts()
+      .then((r) => {
+        const attention = r.counts.pending + r.counts.processed
+        setReorderCount(attention > 0 ? attention : 0)
+      })
       .catch(() => setReorderCount(0))
     }, [])
 
@@ -468,8 +472,13 @@ export default function POSScreen() {
           onDone={(message) => {
             setStockMode(null); setSourceReorder(null); setFlash(message)
             void runSyncCycle('after-receive')
-            // Refresh the reorder-list badge count — fulfilled lists are now excluded.
-            api.reorders().then((r) => setReorderCount(r.records.length)).catch(() => setReorderCount(0))
+            // Refresh the reorder-list badge count — only pending + processed count.
+            api.reorderCounts()
+              .then((r) => {
+                const attention = r.counts.pending + r.counts.processed
+                setReorderCount(attention > 0 ? attention : 0)
+              })
+              .catch(() => setReorderCount(0))
           }}
         />
       )}
@@ -485,3 +494,4 @@ export default function POSScreen() {
     </div>
   )
 }
+

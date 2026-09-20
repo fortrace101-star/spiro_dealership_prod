@@ -67,16 +67,18 @@ export default function Layout() {
     let cancelled = false
     async function loadBadges() {
       try {
-        const [reorders, approvals, lowStock] = await Promise.all([
-          api.reorders().catch(() => ({ records: [] })),
+        const counts = await api.reorderCounts().catch(() => ({ counts: { pending: 0, processed: 0, fulfilled: 0, cancelled: 0 } }))
+        if (cancelled) return
+        // Pending + Processing (not Fulfilled) = attention needed on the Reorder list button.
+        // Fulfilled lists are already received and don't need a badge; cancelled lists
+        // leave the set entirely.
+        const attention = counts.counts.pending + counts.counts.processed
+        setReorderCount(attention > 0 ? attention : null)
+        const [approvals, lowStock] = await Promise.all([
           api.approvals('pending').catch(() => ({ approvals: [] })),
           api.lowStock().catch(() => ({ products: [] })),
         ])
         if (cancelled) return
-        // "New / unfulfilled / uncancelled" = every record currently sitting in the
-        // reorder-lists collection. POS marks fulfilled ones server-side; cancelled
-        // ones leave the set, so whatever is returned here needs attention.
-        setReorderCount(reorders.records.length)
         setApprovalCount(approvals.approvals.length)
         setLowStockCount(lowStock.products.length)
       } catch {

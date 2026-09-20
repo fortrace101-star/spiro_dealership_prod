@@ -119,7 +119,7 @@ export default function ReordersPage() {
         <div className="flex flex-wrap gap-2 mb-4">
           {(['pending', 'processed', 'fulfilled'] as const).map((s) => {
             const count = counts ? counts[s] : null
-            const showBadge = count !== null && count > 0 && s !== 'fulfilled'
+            const showBadge = count !== null && count > 0 && (s === 'pending' || s === 'processed')
             return (
               <button
                 key={s}
@@ -129,9 +129,7 @@ export default function ReordersPage() {
                 {s === 'processed' ? 'Processing' : s}
                 {showBadge && (
                   <span
-                    className={`absolute -top-1.5 -right-1.5 w-4 h-4 flex items-center justify-center text-[9px] font-bold text-white rounded-full ring-1 ring-slate-900 ${
-                      s === 'fulfilled' ? 'bg-emerald-500 ring-emerald-900' : 'bg-orange-500 ring-orange-900'
-                    }`}
+                    className={`absolute -top-1.5 -right-1.5 w-4 h-4 flex items-center justify-center text-[9px] font-bold text-white rounded-full ring-1 ring-slate-900 bg-orange-500 ring-orange-900`}
                   >
                     {count > 9 ? '9+' : count}
                   </span>
