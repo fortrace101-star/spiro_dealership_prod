@@ -1,4 +1,4 @@
-import type { Bike, Product, SessionUser } from './types'
+import type { Bike, BikeReservation, Customer, InstallmentPayment, Product, SessionUser } from './types'
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:4000').replace(/\/+$/, '')
 const TOKEN_KEY = 'spiro_pos_token'
@@ -70,6 +70,7 @@ export interface SyncPayload {
   products: Product[]
   bikes: Bike[]
   categories: string[]
+  customers: Customer[]
   cursor: number
   server_time: string
 }
@@ -89,6 +90,43 @@ export interface PurchasingProduct {
   stock_qty: number
   reorder_level: number
   cost_price: string | number
+  selling_price: number
+}
+
+/** Canonical product categories used across POS + server.
+ *
+ *  Major sections:
+ *   1. I.C.E Spare Parts and Accessories  → 'Spare Parts' | 'Accessories' | 'Consumables'
+ *   2. e-Bikes                            → the VIN-tracked bike itself
+ *   3. e-Bikes Spare Parts                → its own major section
+ *
+ *  The server CHECK also accepts the legacy values ('e-Bike','e-Bike Spare Parts',
+ *  'Spare Parts','Spare part','Accessory','Consumable') for backward
+ *  compatibility with offline DBs, but the UI offers only this curated set. */
+export const PRODUCT_CATEGORIES = [
+  'Spare Parts',
+  'Accessories',
+  'Consumables',
+  'e-Bikes',
+  'e-Bikes Spare Parts',
+] as const
+export type ProductCategory = (typeof PRODUCT_CATEGORIES)[number]
+
+/** Leaf categories belonging to the I.C.E major section. */
+export const ICE_GROUP_CATEGORIES = ['Spare Parts', 'Accessories', 'Consumables'] as const
+
+/** Map any legacy category value to its canonical replacement (identity otherwise). */
+const LEGACY_CATEGORY_MAP: Record<string, ProductCategory> = {
+  'e-Bike': 'e-Bikes',
+  'e-Bike Spare Parts': 'e-Bikes Spare Parts',
+  'Spare Parts': 'Spare Parts',
+  'Spare part': 'Spare Parts',
+  Accessory: 'Accessories',
+  Consumable: 'Consumables',
+}
+export function normalizeCategory(c: string | null | undefined): string {
+  if (!c) return ''
+  return LEGACY_CATEGORY_MAP[c] ?? c
 }
 
 export interface PurchasingItem {
@@ -102,7 +140,7 @@ export interface PurchasingItem {
     sku: string
     name: string
     barcode: string
-    category: 'Spare part' | 'Accessory' | 'Consumable'
+    category: ProductCategory
     selling_price: number
     min_stock: number
     reorder_level: number
@@ -117,9 +155,14 @@ export interface PurchasingRecord {
   supplier?: string | null
   delivery_cost?: string | number
   items_total?: string | number
-  items: { product_id: string; sku: string; name: string; qty: number; unit_cost: number; reorder_level: number }[]
+  items: PurchasingItem[]
   notes: string | null
   created_by_name?: string
+  source_reorder_id?: string | null
+  source_reorder_title?: string | null
+  fulfilled?: boolean
+  fulfilled_at?: string | null
+  status?: 'pending' | 'processed' | 'fulfilled' | 'cancelled'
   created_at: string
 }
 
@@ -150,7 +193,26 @@ export const api = {
 
   reorders: () => request<{ records: PurchasingRecord[] }>('/api/purchasing/reorders'),
 
-  createConsignment: (payload: { reference: string; supplier: string; delivery_cost: number; notes: string; client_txn_id: string; items: PurchasingItem[] }) =>
+  // Server-generated default title for a new reorder list: RL-19-Sep-26-01.
+  nextReorderRef: () => request<{ title: string }>('/api/purchasing/reorders/next-ref'),
+
+  // Reorder-list lifecycle: pending -> processed (list prepared) -> fulfilled (stock received).
+  // 'cancelled' retires a list the shop decided not to order after all.
+  updateReorderStatus: (id: string, status: 'pending' | 'processed' | 'cancelled') =>
+    request<{ ok: boolean }>(`/api/purchasing/reorders/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    }),
+
+    createConsignment: (payload: {
+    reference: string
+    supplier: string
+    delivery_cost: number
+    notes: string
+    client_txn_id: string
+    items: PurchasingItem[]
+    source_reorder_id?: string | null
+  }) =>
     request<{ record: PurchasingRecord; duplicate: boolean }>('/api/purchasing/consignments', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -160,5 +222,47 @@ export const api = {
     request<{ record: PurchasingRecord; duplicate: boolean }>('/api/purchasing/reorders', {
       method: 'POST',
       body: JSON.stringify(payload),
+    }),
+
+  // ---------- Bike reservations & installments (online only) ----------
+  // Reservations lock a VIN server-side: they can never queue offline, so the
+  // UI must refuse these calls when navigator.onLine is false.
+  reservationsLookup: (status = 'active', q = '') =>
+    request<{ reservations: BikeReservation[] }>(
+      `/api/pos/reservations?status=${encodeURIComponent(status)}&q=${encodeURIComponent(q)}`,
+    ),
+
+  reservationDetail: (id: string) =>
+    request<{ reservation: BikeReservation }>(`/api/pos/reservations/${id}`),
+
+  createReservation: (payload: {
+    bike_id: string
+    customer_name: string
+    customer_phone: string
+    total_price: number
+    down_payment: number
+    plan_months?: number
+    payment_method?: string
+    transaction_ref?: string
+    notes?: string
+  }) =>
+    request<{ reservation: BikeReservation }>('/api/pos/reservations', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  recordInstallment: (id: string, payment: { amount: number; payment_method?: string; transaction_ref?: string; note?: string }) =>
+    request<{ payment: InstallmentPayment; balance: number; reservation: BikeReservation }>(
+      `/api/pos/reservations/${id}/payments`,
+      { method: 'POST', body: JSON.stringify(payment) },
+    ),
+
+  completeReservation: (id: string) =>
+    request<{ reservation: BikeReservation }>(`/api/pos/reservations/${id}/complete`, { method: 'POST' }),
+
+  releaseReservation: (id: string, note?: string) =>
+    request<{ reservation?: BikeReservation; pendingApproval?: boolean; message?: string }>(`/api/pos/reservations/${id}/release`, {
+      method: 'POST',
+      body: JSON.stringify({ note: note || null }),
     }),
 }

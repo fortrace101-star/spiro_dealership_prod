@@ -63,6 +63,14 @@ async function recordSale(input, actor) {
     // ---- Derive bike link when the client only set it on items ----
     const bikeId = knownBike(input.bike_id || itemList.find((it) => it.kind === 'bike' && it.bike_id)?.bike_id || null);
 
+    // Traceability guard: E-Bike sales should always carry a customer. The POS
+    // enforces this at checkout; here we only warn (instead of rejecting) so a
+    // sale queued offline before the client update can still sync instead of
+    // being stuck in a permanent failure loop.
+    if ((bikeId || itemList.some((it) => it.kind === 'bike')) && !customerId) {
+      console.warn(`[sale] bike sale ${input.client_txn_id} has no customer linked — POS checkout now requires name + phone for E-Bike sales`);
+    }
+
     // ---- Totals ----
     const subtotal = Number(input.subtotal || 0);
     const discount = Number(input.discount || 0);
@@ -150,8 +158,38 @@ async function recordSale(input, actor) {
       `[sale] RECORDED ${sale.receipt_no} | ${cashierName} | UGX ${Number(sale.total).toLocaleString('en-UG', { maximumFractionDigits: 0 })} | ${sale.payment_method}${input.device_id ? ` | device ${input.device_id}` : ''}${(input.items || []).length ? ` | ${input.items.length} item(s)` : ''}`
     );
     const pushSvc = require('./push');
-    setImmediate(() => {
-      pushSvc.notifyAdmins(pushSvc.saleNotification({ ...sale, cashier_name: cashierName })).catch(() => {});
+    setImmediate(async () => {
+      pushSvc.notifyAdmins(pushSvc.saleNotification({ ...sale, cashier_name: cashierName })).catch(() => {})
+      // Low-stock / stock-out warnings after stock deduction
+      try {
+        for (const it of input.items || []) {
+          if (it.product_id && typeof it.product_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(it.product_id)) {
+            const product = await client.query(
+              `SELECT id, name, sku, stock_qty, reorder_level FROM products WHERE id = $1`,
+              [it.product_id]
+            )
+            if (product.rows[0]) {
+              const p = product.rows[0]
+              const qty = Number(p.stock_qty)
+              const warn = pushSvc.stockWarning(p, qty, it.kind === 'bike' ? `Bike sold — ${receiptNo}` : `Sale ${receiptNo}`)
+              if (warn) pushSvc.notifyAdmins(warn).catch(() => {})
+            }
+          }
+        }
+      } catch {}
+      // Revenue all-time high check
+      try {
+        const todayTotal = await client.query(`SELECT COALESCE(sum(total),0) AS t FROM sales WHERE date(created_at) = CURRENT_DATE`)
+        const prev = await client.query(`SELECT COALESCE(max(revenue),0) AS r FROM revenue_records WHERE id = 1`)
+        if (Number(todayTotal.rows[0]?.t || 0) > Number(prev.rows[0]?.r || 0)) {
+          const rec = await client.query(
+            `INSERT INTO revenue_records (id, revenue, date) VALUES (1, $1, CURRENT_DATE)
+             ON CONFLICT (id) DO UPDATE SET revenue = $1, date = CURRENT_DATE`,
+            [Number(todayTotal.rows[0]?.t || 0)]
+          )
+          pushSvc.notifyAdmins(pushSvc.revenueRecord(rec.rows[0]?.revenue || 0, prev.rows[0]?.r || 0, new Date().toISOString().slice(0, 10))).catch(() => {})
+        }
+      } catch {}
     });
 
     return { sale, items, duplicate: false };

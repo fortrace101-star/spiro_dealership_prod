@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { cartTotals, useCart } from '../store/cart'
 import { PAYMENT_LABELS, type PaymentMethod } from '../lib/types'
 import { ugx } from '../lib/format'
+import { getCustomers } from '../db/repos'
+import type { Customer } from '../lib/types'
 
 interface Props {
   totals: { subtotal: number; discount: number; total: number }
@@ -15,39 +17,63 @@ export default function CheckoutModal({ totals, onClose, onComplete }: Props) {
   const cart = useCart()
   const [customerName, setCustomerName] = useState(cart.customer?.name || '')
   const [customerPhone, setCustomerPhone] = useState(cart.customer?.phone || '')
+  const [registered, setRegistered] = useState(false)
+  const [customerId, setCustomerId] = useState<string | null>(null)
+  const [customers, setCustomers] = useState<Customer[]>([])
   const [discountInput, setDiscountInput] = useState(cart.discount ? String(cart.discount) : '')
   const [error, setError] = useState('')
 
+  useEffect(() => {
+    getCustomers().then(setCustomers).catch(() => setCustomers([]))
+  }, [])
+
   const parsedDiscount = Number(discountInput) || 0
+  function selectCustomer(id: string | null) {
+    setCustomerId(id)
+    if (id) {
+      const c = customers.find((c) => c.id === id)
+      if (c) {
+        setCustomerName(c.full_name)
+        setCustomerPhone(c.phone || '')
+      }
+    }
+  }
   const finalTotals = useMemo(() => cartTotals(cart.items, parsedDiscount), [cart.items, parsedDiscount])
 
-  const amountPaidNum = cart.paymentMethod === 'credit' ? 0 : Number(cart.amountPaid) || 0
-  const changeDue = Math.max(0, amountPaidNum - finalTotals.total)
-  const needsCustomer = cart.paymentMethod === 'credit' || customerPhone.length > 0
+  // Exact-payment checkout: non-credit methods always pay the full total.
+  // Down payments / installments are handled by the reservation flow, never here.
+  const amountPaidNum = cart.paymentMethod === 'credit' ? 0 : finalTotals.total
+  const hasBike = cart.items.some((i) => i.kind === 'bike')
 
   function submit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
 
-    if (cart.paymentMethod !== 'credit' && amountPaidNum < finalTotals.total) {
-      setError(`Amount paid (${ugx(amountPaidNum)}) is less than total (${ugx(finalTotals.total)})`)
-      return
-    }
     if (cart.paymentMethod === 'credit' && !customerPhone.trim()) {
       setError('Credit sales require a customer phone number')
       return
     }
+    if (hasBike && (!customerName.trim() || !customerPhone.trim())) {
+      setError('E-Bike sales require the customer name and phone number')
+      return
+    }
+    if (registered && customerId === null && (!customerName.trim() || !customerPhone.trim())) {
+      setError('Select a registered customer or enter their name and phone number')
+      return
+    }
 
+    // Only attach the order to a customer record when the cashier marked the
+    // buyer as registered (or the sale forces identity: bike / credit). The
+    // server links the sale to the customer by phone automatically.
+    const track = registered || hasBike || cart.paymentMethod === 'credit'
     onComplete({
       discount: parsedDiscount,
       payment_method: cart.paymentMethod,
       amount_paid: amountPaidNum,
-      customer_name: customerName.trim() || (customerPhone.trim() ? 'Walk-in' : null),
-      customer_phone: customerPhone.trim() || null,
+      customer_name: track ? customerName.trim() || 'Walk-in' : null,
+      customer_phone: track ? customerPhone.trim() || null : null,
     })
   }
-
-  const quickCash = [finalTotals.total, 5000, 10000, 20000, 50000, 100000].filter((v, i, a) => v > 0 && a.indexOf(v) === i)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -78,43 +104,90 @@ export default function CheckoutModal({ totals, onClose, onComplete }: Props) {
           </div>
         </div>
 
-        {/* Discount */}
-        <div>
-          <div className="text-xs font-medium text-slate-400 mb-1.5">{'Discount (UGX) — >5% needs manager approval'}</div>
-          <input className="input" type="number" min={0} value={discountInput} onChange={(e) => setDiscountInput(e.target.value)} placeholder="0" />
-        </div>
-
-        {/* Amount paid */}
+        {/* Amount due */}
         {cart.paymentMethod === 'credit' ? (
           <div className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
             Credit sale — total of {ugx(finalTotals.total)} will be recorded as receivable and sent for approval.
           </div>
         ) : (
           <div>
-            <div className="text-xs font-medium text-slate-400 mb-1.5">Amount paid</div>
-            <input className="input text-lg font-bold" type="number" value={cart.amountPaid} onChange={(e) => cart.setAmountPaid(e.target.value)} placeholder={String(finalTotals.total)} />
-            <div className="flex gap-1.5 mt-2 flex-wrap">
-              {quickCash.map((v) => (
-                <button key={v} type="button" className="btn-ghost text-[11px] px-2 py-1" onClick={() => cart.setAmountPaid(String(v))}>
-                  {v === finalTotals.total ? 'Exact' : ugx(v)}
-                </button>
-              ))}
+            <div className="text-xs font-medium text-slate-400 mb-1.5">Amount due</div>
+            <div className="rounded-lg border border-slate-800 bg-[#0b0e13] px-3 py-2.5 text-lg font-bold text-white">
+              {ugx(finalTotals.total)}
             </div>
-            {amountPaidNum > 0 && (
-              <div className="flex justify-between text-sm mt-3 text-slate-400">
-                <span>Change due</span><span className="text-brand-300 font-bold">{ugx(changeDue)}</span>
-              </div>
-            )}
+            <p className="text-[11px] text-slate-600 mt-1.5">Exact payment — no change due. For a down payment / installment plan, use Reserve instead.</p>
           </div>
         )}
 
+        {/* Discount */}
+        <div>
+          <div className="text-xs font-medium text-slate-400 mb-1.5">{'Discount (UGX) — >5% needs manager approval'}</div>
+          <input className="input" type="number" min={0} value={discountInput} onChange={(e) => setDiscountInput(e.target.value)} placeholder="0" />
+        </div>
+
         {/* Customer */}
         <div className="border-t border-slate-800 pt-3 space-y-2">
-          <div className="text-xs font-medium text-slate-400">Customer (optional — required for credit)</div>
-          <div className="grid grid-cols-2 gap-2">
-            <input className="input" value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Name" />
-            <input className="input" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="Phone" />
-          </div>
+          <div className="text-xs font-medium text-slate-400">Customer {hasBike ? '(required — E-Bike in cart)' : '(optional — required for credit)'}</div>
+
+          {/* Registered customer radio — Walk-in is the default (unchecked) */}
+          <label className="flex items-center gap-2 cursor-pointer group">
+            <input
+              type="radio"
+              name="customer-type"
+              checked={registered}
+              onClick={() => {
+                const next = !registered
+                setRegistered(next)
+                setCustomerId(null)
+                if (!next) {
+                  setCustomerName('')
+                  setCustomerPhone('')
+                }
+              }}
+              className="w-4 h-4 text-brand-500 border-slate-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
+            />
+            <span className="text-xs font-semibold text-slate-300 group-hover:text-white transition">Registered customer</span>
+          </label>
+
+          {registered && (
+            <p className="text-[11px] text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-3 py-2">
+              This order will be added to the customer&apos;s record and tracked in their purchase history.
+            </p>
+          )}
+
+          {/* Customer selection: dropdown for registered, name+phone fields for walk-in */}
+          {registered ? (
+            <select
+              className="input w-full"
+              value={customerId || ''}
+              onChange={(e) => selectCustomer(e.target.value || null)}
+              aria-label="Select a registered customer"
+            >
+              <option value="">— Select a registered customer —</option>
+              {customers.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.full_name} — {c.phone || 'No phone'}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                className="input"
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                placeholder="Name"
+                required={hasBike || cart.paymentMethod === 'credit'}
+              />
+              <input
+                className="input"
+                value={customerPhone}
+                onChange={(e) => setCustomerPhone(e.target.value)}
+                placeholder="Phone"
+                required={hasBike || cart.paymentMethod === 'credit'}
+              />
+            </div>
+          )}
         </div>
 
         {/* Totals */}
@@ -129,8 +202,10 @@ export default function CheckoutModal({ totals, onClose, onComplete }: Props) {
         <button className="btn-primary w-full text-base" disabled={cart.items.length === 0}>
           Complete sale · {ugx(finalTotals.total)}
         </button>
-        {needsCustomer && cart.paymentMethod !== 'credit' && (
-          <p className="text-[11px] text-slate-600 text-center">Customer info is optional for paid sales.</p>
+        {cart.paymentMethod !== 'credit' && (
+          <p className="text-[11px] text-slate-600 text-center">
+            {hasBike ? 'Customer name + phone are required for E-Bike sales.' : 'Customer info is optional for paid sales.'}
+          </p>
         )}
       </form>
     </div>

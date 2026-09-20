@@ -16,12 +16,12 @@ export function num(v: string | number | null | undefined): string {
 
 export function dateTime(iso: string | null | undefined): string {
   if (!iso) return '—'
-  return new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+  return new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Kampala' })
 }
 
 export function dateOnly(iso: string | null | undefined): string {
   if (!iso) return '—'
-  return new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  return new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Africa/Kampala' })
 }
 
 export function timeAgo(iso: string | null | undefined): string {

@@ -1,0 +1,105 @@
+﻿=== 1. ADMIN SalesPage pagination ===
+7: import { Badge, EmptyState, PageHeader, Spinner } from '../components/ui'
+10: const PAGE_SIZE = 20
+12: export default function SalesPage() {
+18: const [page, setPage] = useState(1)
+37: setPage(1)
+46: const totalPages = Math.max(1, Math.ceil((sales?.length || 0) / PAGE_SIZE))
+47: const safePage = Math.min(page, totalPages)
+48: const pageItems = (sales || []).slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+49: const rangeFrom = (sales?.length || 0) === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1
+50: const rangeTo = Math.min(safePage * PAGE_SIZE, sales?.length || 0)
+54: <PageHeader title="Sales" subtitle="Every transaction across the dealership" />
+90: {pageItems.map((s) => (
+112: <button className="btn-ghost text-xs" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>← Prev</button>
+113: <span className="text-slate-400 text-xs">Page {safePage} of {totalPages}</span>
+114: <button className="btn-ghost text-xs" disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}>Next →</button>
+
+=== 2. POS CheckoutModal ===
+7: totals: { subtotal: number; discount: number; total: number }
+9: onComplete: (input: { discount: number; payment_method: PaymentMethod; amount_paid: number; customer_name: string | null; customer_phone: string | null }) => void
+16: const [customerName, setCustomerName] = useState(cart.customer?.name || '')
+17: const [customerPhone, setCustomerPhone] = useState(cart.customer?.phone || '')
+18: const [discountInput, setDiscountInput] = useState(cart.discount ? String(cart.discount) : '')
+21: const parsedDiscount = Number(discountInput) || 0
+22: const finalTotals = useMemo(() => cartTotals(cart.items, parsedDiscount), [cart.items, parsedDiscount])
+26: const amountPaidNum = cart.paymentMethod === 'credit' ? 0 : finalTotals.total
+27: const hasBike = cart.items.some((i) => i.kind === 'bike')
+33: if (cart.paymentMethod === 'credit' && !customerPhone.trim()) {
+37: if (hasBike && (!customerName.trim() || !customerPhone.trim())) {
+43: discount: parsedDiscount,
+45: amount_paid: amountPaidNum,
+46: customer_name: customerName.trim() || (customerPhone.trim() ? 'Walk-in' : null),
+47: customer_phone: customerPhone.trim() || null,
+80: {/* Amount due */}
+87: <div className="text-xs font-medium text-slate-400 mb-1.5">Amount due</div>
+95: {/* Discount */}
+97: <div className="text-xs font-medium text-slate-400 mb-1.5">{'Discount (UGX) — >5% needs manager approval'}</div>
+98: <input className="input" type="number" min={0} value={discountInput} onChange={(e) => setDiscountInput(e.target.value)} placeholder="0" />
+103: <div className="text-xs font-medium text-slate-400">Customer {hasBike ? '(required — E-Bike in cart)' : '(optional — required for credit)'}</div>
+105: <input className="input" value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Name" required={hasBike} />
+106: <input className="input" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="Phone" required={hasBike} />
+113: {parsedDiscount > 0 && <div className="flex justify-between text-amber-300"><span>Discount</span><span>− {ugx(parsedDiscount)}</span></div>}
+124: {hasBike ? 'Customer name + phone are required for E-Bike sales.' : 'Customer info is optional for paid sales.'}
+
+=== 3. POS components ===
+CheckoutModal.tsx
+HistoryModal.tsx
+MobileBlocker.tsx
+POSScreen.tsx
+ReceiptModal.tsx
+ReceiveSelectModal.tsx
+ReceivingScreen.tsx
+RegisterScreen.tsx
+ReservationsModal.tsx
+
+=== 4. POS reserve wiring ===
+17: import ReservationsModal from './ReservationsModal'
+364: <ReservationsModal
+
+=== 5. Server reservation routes ===
+pos.js:7: listReservations,
+pos.js:14: } = require('../services/reservations');
+pos.js:79: // ---------- Bike reservations & installments (POS, cashier-accessible) ----------
+pos.js:80: // Reservations need live row-level locking on the bike (they can never queue
+pos.js:84: /** List reservations (status defaults to 'active'), searching VIN/model/customer. */
+pos.js:85: router.get('/reservations', async (req, res) => {
+pos.js:87: const reservations = await listReservations({ status: req.query.status ?? 'active', q: req.query.q || '' });
+pos.js:88: res.json({ reservations });
+pos.js:90: console.error('[pos/reservations] list failed:', err.message);
+pos.js:91: res.status(500).json({ error: 'Failed to load reservations' });
+pos.js:96: router.get('/reservations/:id', async (req, res) => {
+pos.js:102: console.error('[pos/reservations] detail failed:', err.message);
+pos.js:112: router.post('/reservations', async (req, res) => {
+pos.js:127: console.error('[pos/reservations] create failed:', err);
+pos.js:133: router.post('/reservations/:id/payments', async (req, res) => {
+pos.js:140: console.error('[pos/reservations] payment failed:', err);
+pos.js:146: router.post('/reservations/:id/complete', async (req, res) => {
+pos.js:152: console.error('[pos/reservations] complete failed:', err);
+pos.js:158: router.post('/reservations/:id/release', requirePermission('inventory_entry'), async (req, res) => {
+pos.js:164: console.error('[pos/reservations] release failed:', err);
+admin.js:206: // ---------- Bike reservations & installments (admin) ----------
+admin.js:218: FROM bike_reservations r
+admin.js:225: const payments = (Array.isArray(r.reservations_payments) ? r.reservations_payments : []).map((p) => ({
+admin.js:239: reservations_payments: payments,
+admin.js:253: return shapeReservation({ ...r, reservations_payments: payments });
+admin.js:256: // List reservations (status defaults to 'active'), optionally searching VIN/customer.
+admin.js:257: router.get('/reservations', requireRole(), async (req, res) => {
+admin.js:269: const reservations = await many(
+admin.js:279: ), '[]'::json) AS reservations_payments
+admin.js:283: res.json({ reservations: reservations.map(shapeReservation) });
+admin.js:287: router.get('/reservations/:id', requireRole(), async (req, res) => {
+admin.js:294: router.post('/reservations', requireRole(), async (req, res) => {
+admin.js:318: `INSERT INTO bike_reservations (bike_id, customer_id, reserved_by, total_price, down_payment, balance, plan_months, status, notes)
+admin.js:355: router.post('/reservations/:id/payments', requireRole(), async (req, res) => {
+admin.js:367: throw Object.assign(new Error(`Reservation is ${resv.status}; payments can only be recorded on active reservations`), { status: 400 });
+admin.js:384: `UPDATE bike_reservations SET status = 'completed', balance = 0, completed_at = now(), updated_at = now() WHERE id = $1`,
+admin.js:394: `UPDATE bike_reservations SET balance = GREATEST(0, balance - $1), updated_at = now() WHERE id = $2`,
+admin.js:413: router.post('/reservations/:id/complete', requireRole(), async (req, res) => {
+admin.js:421: throw Object.assign(new Error(`Reservation is ${resv.status}; only active reservations can be completed`), { status: 400 });
+admin.js:427: `UPDATE bike_reservations SET status = 'completed', balance = 0, completed_at = now(), updated_at = now() WHERE id = $1`,
+admin.js:449: router.post('/reservations/:id/release', requireRole(), async (req, res) => {
+admin.js:455: `SELECT r.*, b.status AS bike_status FROM bike_reservations r JOIN bikes b ON b.id = r.bike_id WHERE r.id = $1 FOR UPDATE`,
+admin.js:461: throw Object.assign(new Error(`Reservation is ${resv.status}; only active reservations can be released`), { status: 400 });
+admin.js:464: `UPDATE bike_reservations SET status = 'released', released_at = now(), updated_at = now() WHERE id = $1`,
+admin.js:473: `UPDATE bike_reservations SET notes = CASE WHEN notes IS NULL OR notes = '' THEN $1 ELSE notes || E'\n' || $1 END WHERE id = $2`,

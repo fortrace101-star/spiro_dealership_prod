@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { dateTime, PAYMENT_LABELS, ugx } from '../lib/format'
-import type { Customer, Sale } from '../lib/types'
+import type { Customer, Sale, SaleItem } from '../lib/types'
 import { Badge, EmptyState, PageHeader, Spinner } from '../components/ui'
 import { Field, Modal } from './InventoryPage'
 
@@ -15,6 +15,10 @@ export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[] | null>(null)
   const [q, setQ] = useState('')
   const [detail, setDetail] = useState<CustomerDetail | null>(null)
+  // Purchase-order drill-down inside the customer detail modal
+  const [saleDetail, setSaleDetail] = useState<{ sale: Sale; items: SaleItem[] } | null>(null)
+  const [saleLoading, setSaleLoading] = useState(false)
+  const [saleError, setSaleError] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ full_name: '', phone: '', email: '', address: '', notes: '' })
   const [error, setError] = useState('')
@@ -30,6 +34,19 @@ export default function CustomersPage() {
 
   async function open(id: string) {
     setDetail(await api.customer(id))
+  }
+
+  /** Drill into one purchase order from the customer's history. */
+  async function openPurchase(id: string) {
+    setSaleError('')
+    setSaleLoading(true)
+    try {
+      setSaleDetail(await api.sale(id))
+    } catch (err) {
+      setSaleError(err instanceof Error ? err.message : 'Could not load the purchase order')
+    } finally {
+      setSaleLoading(false)
+    }
   }
 
   async function save(e: React.FormEvent) {
@@ -135,16 +152,82 @@ export default function CustomersPage() {
             ) : (
               <div className="space-y-1.5">
                 {detail.purchases.map((p) => (
-                  <div key={p.id} className="flex items-center justify-between bg-[#0b0e13] rounded-xl px-3 py-2 border border-slate-800/60 text-sm">
+                  <div
+                    key={p.id}
+                    className="flex items-center justify-between bg-[#0b0e13] rounded-xl px-3 py-2 border border-slate-800/60 text-sm hover:border-brand-500/40 cursor-pointer transition"
+                    onClick={() => void openPurchase(p.id)}
+                  >
                     <div>
                       <span className="font-mono text-xs text-brand-300">{p.receipt_no}</span>
                       <div className="text-[11px] text-slate-600">{dateTime(p.created_at)} · {PAYMENT_LABELS[p.payment_method] || p.payment_method}</div>
                     </div>
-                    <span className="font-semibold text-white">{ugx(p.total)}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-white">{ugx(p.total)}</span>
+                      <span className="text-slate-600 text-xs">›</span>
+                    </div>
                   </div>
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Purchase order detail — layered above the customer modal */}
+      {saleDetail && (
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center sm:p-4" onClick={() => setSaleDetail(null)}>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+          <div className="relative w-full card rounded-b-none sm:rounded-2xl p-4 sm:p-5 max-h-[92vh] overflow-y-auto sm:max-w-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between mb-4 gap-4">
+              <div>
+                <div className="font-mono text-brand-300 text-lg">{saleDetail.sale.receipt_no}</div>
+                <div className="text-xs text-slate-500">{dateTime(saleDetail.sale.created_at)}</div>
+              </div>
+              <button className="btn-ghost text-xs" onClick={() => setSaleDetail(null)}>Close</button>
+            </div>
+
+            {/* Transaction metadata */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm mb-4">
+              <Info label="Customer" value={saleDetail.sale.customer_name || 'Walk-in'} />
+              <Info label="Cashier" value={saleDetail.sale.cashier_name || '—'} />
+              <Info label="Payment method" value={PAYMENT_LABELS[saleDetail.sale.payment_method] || saleDetail.sale.payment_method} />
+              <Info label="Status" value={saleDetail.sale.status} />
+              <Info label="Device" value={saleDetail.sale.device_id || '—'} />
+              <Info label="Transaction ID" value={saleDetail.sale.client_txn_id || '—'} />
+              {saleDetail.sale.bike_vin && <Info label="Bike VIN" value={saleDetail.sale.bike_vin} />}
+              {saleDetail.sale.bike_model && <Info label="Bike model" value={saleDetail.sale.bike_model} />}
+            </div>
+
+            {/* What they bought */}
+            <h4 className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">Items</h4>
+            <table className="w-full mb-4">
+              <thead>
+                <tr>
+                  <th className="th">Item</th>
+                  <th className="th text-right">Qty</th>
+                  <th className="th text-right">Price</th>
+                  <th className="th text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {saleDetail.items.map((it) => (
+                  <tr key={it.id}>
+                    <td className="td">{it.name}{it.kind === 'bike' && <span className="text-xs text-brand-300 ml-1">🛵</span>}</td>
+                    <td className="td text-right">{it.qty}</td>
+                    <td className="td text-right text-slate-400">{ugx(it.unit_price)}</td>
+                    <td className="td text-right">{ugx(it.line_total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {/* Amounts */}
+            <div className="space-y-1.5 text-sm border-t border-slate-800 pt-3">
+              <Row label="Subtotal" value={ugx(saleDetail.sale.subtotal)} />
+              {Number(saleDetail.sale.discount) > 0 && <Row label="Discount" value={`− ${ugx(saleDetail.sale.discount)}`} />}
+              <Row label="Total" value={ugx(saleDetail.sale.total)} bold />
+              <Row label="Gross profit" value={ugx(saleDetail.sale.profit)} />
+            </div>
           </div>
         </div>
       )}
@@ -168,6 +251,25 @@ export default function CustomersPage() {
           </form>
         </Modal>
       )}
+    </div>
+  )
+}
+
+/** Metadata tile for the purchase-order detail modal. */
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-[#0b0e13] rounded-xl p-3 border border-slate-800/60">
+      <div className="text-[10px] uppercase tracking-wider text-slate-500">{label}</div>
+      <div className="font-medium text-white mt-0.5 break-words">{value}</div>
+    </div>
+  )
+}
+
+function Row({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
+  return (
+    <div className={`flex justify-between ${bold ? 'text-white font-semibold text-base' : 'text-slate-400'}`}>
+      <span>{label}</span>
+      <span>{value}</span>
     </div>
   )
 }

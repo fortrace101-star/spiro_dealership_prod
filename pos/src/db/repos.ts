@@ -1,6 +1,6 @@
 import { uuid } from './uuid'
 import { db } from './database'
-import type { Bike, LocalSale, LocalSaleItem, Product, SyncQueueEntry } from '../lib/types'
+import type { Bike, Customer, LocalSale, LocalSaleItem, Product, SyncQueueEntry } from '../lib/types'
 
 // ---------- Catalog ----------
 /**
@@ -35,6 +35,19 @@ export function getCategories() {
 }
 export async function getProductByBarcode(barcode: string): Promise<Product | undefined> {
   return db.products.where('barcode').equals(barcode).first()
+}
+
+// ---------- Customers (synced from server as a full list; no updated_at column) ----------
+
+export async function saveCustomers(customers: Customer[]): Promise<void> {
+  await db.transaction('rw', db.customers, async () => {
+    await db.customers.clear()
+    if (customers.length) await db.customers.bulkAdd(customers)
+  })
+}
+
+export function getCustomers(): Promise<Customer[]> {
+  return db.customers.toArray()
 }
 
 // ---------- Settings / cursor ----------

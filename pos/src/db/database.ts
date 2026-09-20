@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie'
-import type { Bike, LocalSale, LocalSaleItem, Product, SyncQueueEntry } from '../lib/types'
+import type { Bike, Customer, LocalSale, LocalSaleItem, Product, SyncQueueEntry } from '../lib/types'
 
 export interface SettingRow {
   key: string
@@ -9,6 +9,7 @@ export interface SettingRow {
 export class SpiroPosDB extends Dexie {
   products!: Table<Product, string>
   bikes!: Table<Bike, string>
+  customers!: Table<Customer, string>
   categories!: Table<string, number>
   sales!: Table<LocalSale, string>
   saleItems!: Table<LocalSaleItem, number>
@@ -17,9 +18,10 @@ export class SpiroPosDB extends Dexie {
 
   constructor() {
     super('spiroPosDatabase')
-    this.version(1).stores({
+    this.version(2).stores({
       products: 'id, barcode, sku, name, category, updated_at',
       bikes: 'id, vin, model, status, updated_at',
+      customers: 'id, phone, full_name',
       categories: '++',
       sales: 'id, client_txn_id, status, created_at',
       saleItems: '++id, sale_id, product_id, bike_id',

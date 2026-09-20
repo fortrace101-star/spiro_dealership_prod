@@ -59,7 +59,10 @@ const BADGE_COLORS: Record<string, string> = {
   rejected: 'bg-red-500/15 text-red-300 border-red-500/20',
   in_stock: 'bg-brand-500/15 text-brand-300 border-brand-500/20',
   sold: 'bg-slate-500/15 text-slate-400 border-slate-500/20',
-  reserved: 'bg-sky-500/15 text-sky-300 border-sky-500/20',
+    reserved: 'bg-sky-500/15 text-sky-300 border-sky-500/20',
+  active: 'bg-amber-500/15 text-amber-300 border-amber-500/20',
+  released: 'bg-slate-500/15 text-slate-400 border-slate-500/20',
+  expired: 'bg-red-500/15 text-red-300 border-red-500/20',
 }
 
 export function Badge({ kind, children }: { kind?: string; children: ReactNode }) {

@@ -45,7 +45,7 @@ export default function OverviewPage() {
 
   useEffect(() => {
     load()
-    const iv = setInterval(load, 60_000) // live refresh
+    const iv = setInterval(load, 5_000) // live refresh
     return () => clearInterval(iv)
   }, [load])
 

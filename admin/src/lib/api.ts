@@ -1,5 +1,6 @@
 import type {
-  ActivationCode, Approval, AuditEntry, Bike, Customer, CustomerBikeLink, Product, PurchasingRecord, RangeReport,
+  ActivationCode, Approval, AuditEntry, Bike, BikeReservation, Customer, CustomerBikeLink, InstallmentPayment,
+  Product, PurchasingRecord, RangeReport,
   Sale, SaleItem, StockMovement, TodayReport, HourlyPoint, User, VinLookupResult,
 } from './types'
 
@@ -131,14 +132,49 @@ export const api = {
   vinLookup: (vin: string) => request<VinLookupResult>(`/api/admin/bikes/lookup/${encodeURIComponent(vin)}`),
   adjustStock: (product_id: string, qty: number, note: string, type = 'adjustment') =>
     request<{ movement: StockMovement; stock_qty: number }>('/api/admin/inventory/adjust', { method: 'POST', body: JSON.stringify({ product_id, qty, note, type }) }),
-  movements: (productId = '') => request<{ movements: StockMovement[] }>(`/api/admin/inventory/movements?product_id=${productId}`),
+    movements: (productId = '') => request<{ movements: StockMovement[] }>(`/api/admin/inventory/movements?product_id=${productId}`),
+
+  // reservations — bikes sold in installments: reserve after a down payment,
+  // track each installment, and complete once paid off completely.
+  reservations: (status = '', q = '') =>
+    request<{ reservations: BikeReservation[] }>(
+      `/api/admin/reservations?status=${encodeURIComponent(status)}&q=${encodeURIComponent(q)}`,
+    ),
+  reservation: (id: string) => request<{ reservation: BikeReservation }>(`/api/admin/reservations/${id}`),
+  createReservation: (payload: {
+    bike_id: string
+    customer_id: string
+    total_price: number
+    down_payment: number
+    plan_months: number
+    payment_method?: string
+    transaction_ref?: string
+    notes?: string
+  }) => request<{ reservation: BikeReservation }>('/api/admin/reservations', { method: 'POST', body: JSON.stringify(payload) }),
+  addReservationPayment: (id: string, payment: { amount: number; payment_method: string; transaction_ref?: string; note?: string }) =>
+    request<{ payment: InstallmentPayment; balance: number; reservation: BikeReservation }>(
+      `/api/admin/reservations/${id}/payments`,
+      { method: 'POST', body: JSON.stringify(payment) },
+    ),
+  completeReservation: (id: string) => request<{ reservation: BikeReservation }>(`/api/admin/reservations/${id}/complete`, { method: 'POST' }),
+  releaseReservation: (id: string, payload: { note?: string } = {}) =>
+    request<{ reservation: BikeReservation }>(`/api/admin/reservations/${id}/release`, { method: 'POST', body: JSON.stringify(payload) }),
 
   // shared purchasing — admins and managers can prepare and review stock requests
   purchasingCatalog: () => request<{ products: Product[]; can_receive: boolean }>('/api/purchasing/catalog'),
-  reorders: () => request<{ records: PurchasingRecord[] }>('/api/purchasing/reorders'),
+  reorders: (status?: string) => request<{ records: PurchasingRecord[] }>(`/api/purchasing/reorders${status && status !== 'all' ? `?status=${encodeURIComponent(status)}` : ''}`),
+  reorderCounts: () => request<{ counts: { pending: number; processed: number; fulfilled: number; cancelled: number } }>('/api/purchasing/reorders/counts'),
   consignments: () => request<{ records: PurchasingRecord[] }>('/api/purchasing/consignments'),
   createReorder: (payload: { title: string; notes: string; client_txn_id: string; items: { product_id: string; qty: number }[] }) =>
     request<{ record: PurchasingRecord; duplicate: boolean }>('/api/purchasing/reorders', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // Reorder-list lifecycle: pending -> processed (list prepared) -> fulfilled (stock received).
+  // 'cancelled' retires a list the shop decided not to order after all.
+  updateReorderStatus: (id: string, status: 'pending' | 'processed' | 'cancelled') =>
+    request<{ ok: boolean }>(`/api/purchasing/reorders/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    }),
 
   // customers
   customers: (q = '') => request<{ customers: Customer[] }>(`/api/admin/customers?q=${encodeURIComponent(q)}`),

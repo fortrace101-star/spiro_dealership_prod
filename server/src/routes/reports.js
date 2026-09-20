@@ -96,18 +96,18 @@ router.get('/today', async (req, res) => {
   });
 });
 
-/** Hourly revenue/profit for today's area chart */
+/** Hourly revenue/profit for today's area chart — hours in Uganda time (EAT, UTC+3) */
 router.get('/today/hourly', async (req, res) => {
   const rows = await many(
-    `SELECT EXTRACT(HOUR FROM created_at)::int AS hour,
+    `SELECT EXTRACT(HOUR FROM created_at AT TIME ZONE 'Africa/Kampala')::int AS hour,
             COALESCE(sum(total),0) AS revenue, COALESCE(sum(profit),0) AS profit
        FROM sales
-      WHERE created_at >= date_trunc('day', now())
+      WHERE created_at >= (date_trunc('day', now() AT TIME ZONE 'Africa/Kampala') AT TIME ZONE 'UTC')
       GROUP BY hour ORDER BY hour`
   );
+  const nowHour = (new Date().getUTCHours() + 3) % 24;
   const byHour = new Map(rows.map((r) => [Number(r.hour), r]));
   const series = [];
-  const nowHour = new Date().getHours();
   for (let h = 0; h <= nowHour; h++) {
     const r = byHour.get(h);
     series.push({ hour: h, revenue: Number(r?.revenue || 0), profit: Number(r?.profit || 0) });

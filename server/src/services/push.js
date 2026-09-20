@@ -60,4 +60,4 @@ function saleNotification(sale) {
   };
 }
 
-module.exports = { notifyAdmins, saleNotification, ensureConfigured };
+module.exports = { notifyAdmins, saleNotification, stockWarning, revenueRecord, ensureConfigured };

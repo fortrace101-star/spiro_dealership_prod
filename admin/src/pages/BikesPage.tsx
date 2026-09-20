@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { cn } from '../lib/cn'
 import { dateTime, num, ugx } from '../lib/format'
-import type { Bike, VinLookupResult } from '../lib/types'
+import type { Bike, BikeReservation, VinLookupResult } from '../lib/types'
 import { Badge, EmptyState, PageHeader, Spinner } from '../components/ui'
 import { Field, Modal } from './InventoryPage'
+import { ReservationDetailModal, ReserveBikeModal, ReservationsTabContent } from './ReservationModals'
 
 const EMPTY = { vin: '', model: '', color: '', year: '', motor_number: '', battery_serial: '', battery_spec: '', odometer_km: '0', cost_price: '', selling_price: '', location: 'Main showroom' }
 
@@ -19,7 +21,16 @@ export default function BikesPage() {
   const [lookupError, setLookupError] = useState('')
   const [lookupBusy, setLookupBusy] = useState(false)
 
-  const load = useCallback(async () => {
+  // installments / reservations
+  const [tab, setTab] = useState<'inventory' | 'reservations'>('inventory')
+  const [reservations, setReservations] = useState<BikeReservation[] | null>(null)
+  const [resFilter, setResFilter] = useState('active')
+  const [resQ, setResQ] = useState('')
+  const [showReserve, setShowReserve] = useState(false)
+  const [detailId, setDetailId] = useState<string | null>(null)
+  const [resError, setResError] = useState('')
+
+    const load = useCallback(async () => {
     const r = await api.bikes(q, status)
     setBikes(r.bikes)
   }, [q, status])
@@ -27,6 +38,21 @@ export default function BikesPage() {
   useEffect(() => {
     load().catch(() => setBikes([]))
   }, [load])
+
+  const loadRes = useCallback(async () => {
+    try {
+      const r = await api.reservations(resFilter, resQ)
+      setReservations(r.reservations)
+      setResError('')
+    } catch (err) {
+      setReservations([])
+      setResError(err instanceof Error ? err.message : 'Could not load reservations')
+    }
+  }, [resFilter, resQ])
+
+  useEffect(() => {
+    loadRes()
+  }, [loadRes])
 
   async function saveBike(e: React.FormEvent) {
     e.preventDefault()
@@ -67,8 +93,19 @@ export default function BikesPage() {
       <PageHeader
         title="Bikes & VIN Tracking"
         subtitle="Every bike individually traceable — from purchase to customer"
-        actions={<button className="btn-primary" onClick={() => setShowForm(true)}>+ Add bike</button>}
+                actions={tab === 'inventory'
+          ? <button className="btn-primary" onClick={() => setShowForm(true)}>+ Add bike</button>
+          : <button className="btn-primary" onClick={() => setShowReserve(true)}>+ Reserve bike</button>}
       />
+
+      {/* Tabs */}
+      <div className="flex gap-1 mb-4 card p-1">
+        <button className={cn('btn text-xs', tab === 'inventory' ? 'btn-primary' : 'btn-ghost')} onClick={() => setTab('inventory')}>Inventory</button>
+        <button className={cn('btn text-xs', tab === 'reservations' ? 'btn-primary' : 'btn-ghost')} onClick={() => setTab('reservations')}>Installments / Reservations</button>
+      </div>
+
+      {tab === 'inventory' && (
+      <>
 
       {/* VIN 360 lookup */}
       <form onSubmit={runLookup} className="card p-4 mb-4 flex flex-col sm:flex-row gap-3 sm:items-center">
@@ -157,7 +194,21 @@ export default function BikesPage() {
             </table>
           </div>
         )}
-      </div>
+            </div>
+      </>
+      )}
+
+      {tab === 'reservations' && (
+        <ReservationsTabContent
+          reservations={reservations}
+          resFilter={resFilter}
+          setResFilter={setResFilter}
+          resQ={resQ}
+          setResQ={setResQ}
+          onReserve={() => setShowReserve(true)}
+          onOpenDetail={(id: string) => setDetailId(id)}
+        />
+      )}
 
       {/* Add bike modal */}
       {showForm && (
@@ -188,8 +239,11 @@ export default function BikesPage() {
               <button className="btn-primary w-full sm:w-auto">Add bike</button>
             </div>
           </form>
-        </Modal>
+                </Modal>
       )}
+
+      {showReserve && <ReserveBikeModal onClose={() => setShowReserve(false)} onDone={() => { setShowReserve(false); loadRes() }} />}
+      {detailId && <ReservationDetailModal id={detailId} onClose={() => setDetailId(null)} onUpdated={loadRes} />}
     </div>
   )
 }

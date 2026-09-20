@@ -1,5 +1,62 @@
 // Shared API types (matching server responses)
 
+export interface ServiceJobCard {
+  id: string
+  bike_id: string
+  customer_id: string | null
+  bike?: BikeMini
+  customer_name?: string | null
+  mileage_km: number
+  issue: string
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled'
+  assigned_to?: string | null
+  assigned_to_name?: string | null
+  priority: 'low' | 'normal' | 'high' | 'urgent'
+  created_by: string
+  created_by_name?: string | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  notes: string | null
+  activities?: ServiceActivity[]
+  total_parts_cost: number
+  total_labour_cost: number
+  total_cost: number
+}
+
+export interface ServiceActivity {
+  id: string
+  job_card_id: string
+  type: 'inspection' | 'battery_inspection' | 'battery_repair' | 'battery_replacement' | 'motor_inspection' | 'motor_repair' | 'motor_replacement' | 'brake_replacement' | 'suspension' | 'tire_repair' | 'electrical' | 'part_replacement' | 'labour' | 'other'
+  description: string
+  parts_used: ServicePartUsed[]
+  labour_cost: number
+  total_cost: number
+  performed_by: string | null
+  performed_by_name?: string | null
+  performed_at: string
+  notes: string | null
+}
+
+export interface ServicePartUsed {
+  name: string
+  qty: number
+  unit_cost: number
+}
+
+export interface ServiceHistorySummary {
+  job_cards_count: number
+  total_spent: number
+  last_service_at: string | null
+}
+
+export interface BikeMini {
+  id: string
+  vin: string
+  model: string
+  status: string
+}
+
 export type Role = 'admin' | 'manager' | 'cashier' | 'mechanic'
 
 /** Extra POS capabilities that can be granted on an activation code */
@@ -129,7 +186,7 @@ export interface ActivationCode {
 
 export interface Approval {
   id: string
-  type: 'discount' | 'stock_adjustment' | 'credit_sale' | 'refund'
+  type: 'discount' | 'stock_adjustment' | 'credit_sale' | 'refund' | 'reservation_release'
   requested_by_name?: string | null
   payload: Record<string, unknown>
   status: 'pending' | 'approved' | 'rejected'
@@ -222,10 +279,47 @@ export interface PurchasingRecord {
   items: PurchasingListItem[]
   notes: string | null
   created_by_name?: string
+  source_reorder_id?: string | null
+  source_reorder_title?: string | null
   created_at: string
+  status?: string
 }
 
 export interface VinLookupResult {
   bike: Bike
   sales: { id: string; receipt_no: string; total: string | number; created_at: string; cashier: string }[]
+}
+
+export interface InstallmentPayment {
+  id: string
+  reservation_id: string
+  amount: number
+  payment_method: string
+  paid_by: string | null
+  paid_by_name?: string | null
+  transaction_ref: string | null
+  note: string | null
+  created_at: string
+}
+
+export interface BikeReservation {
+  id: string
+  bike_id: string
+  customer_id: string
+  reserved_by: string
+  reserved_by_name?: string | null
+  reserved_at: string
+  total_price: number
+  down_payment: number
+  balance: number
+  plan_months: number
+  status: 'active' | 'completed' | 'released' | 'expired'
+  notes: string | null
+  completed_at: string | null
+  released_at: string | null
+  created_at: string
+  updated_at: string
+  bike?: BikeMini & { selling_price?: number | string }
+  customer?: { id: string; full_name: string; phone: string | null; email?: string | null; address?: string | null; notes?: string | null }
+  reservations_payments?: InstallmentPayment[]
 }

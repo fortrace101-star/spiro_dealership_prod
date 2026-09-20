@@ -7,12 +7,15 @@ import type { Sale, SaleItem } from '../lib/types'
 import { Badge, EmptyState, PageHeader, Spinner } from '../components/ui'
 import { PeriodPicker } from '../components/PeriodPicker'
 
+const PAGE_SIZE = 20
+
 export default function SalesPage() {
   const [sales, setSales] = useState<Sale[] | null>(null)
   const [q, setQ] = useState('')
   const [period, setPeriod] = useState<Period>(PERIODS[0]) // Today by default
   const [payment, setPayment] = useState('')
   const [detail, setDetail] = useState<{ sale: Sale; items: SaleItem[] } | null>(null)
+  const [page, setPage] = useState(1)
 
   const load = useCallback(async () => {
     const params = new URLSearchParams()
@@ -31,6 +34,7 @@ export default function SalesPage() {
   }, [q, period, payment])
 
   useEffect(() => {
+    setPage(1)
     load().catch(() => setSales([]))
   }, [load])
 
@@ -38,6 +42,12 @@ export default function SalesPage() {
     const r = await api.sale(id)
     setDetail(r)
   }
+
+  const totalPages = Math.max(1, Math.ceil((sales?.length || 0) / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const pageItems = (sales || []).slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  const rangeFrom = (sales?.length || 0) === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1
+  const rangeTo = Math.min(safePage * PAGE_SIZE, sales?.length || 0)
 
   return (
     <div>
@@ -77,7 +87,7 @@ export default function SalesPage() {
                 </tr>
               </thead>
               <tbody>
-                {sales.map((s) => (
+                {pageItems.map((s) => (
                   <tr key={s.id} className="hover:bg-slate-800/30 cursor-pointer" onClick={() => openDetail(s.id)}>
                     <td className="td font-mono text-xs text-brand-300">{s.receipt_no}</td>
                     <td className="td text-slate-400">{dateTime(s.created_at)}</td>
@@ -93,6 +103,18 @@ export default function SalesPage() {
           </div>
         )}
       </div>
+
+      {/* Pagination */}
+      {sales && sales.length > 0 && (
+        <div className="flex items-center justify-between mt-3 text-sm">
+          <span className="text-slate-500">Showing {rangeFrom}–{rangeTo} of {sales.length}</span>
+          <div className="flex items-center gap-2">
+            <button className="btn-ghost text-xs" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>← Prev</button>
+            <span className="text-slate-400 text-xs">Page {safePage} of {totalPages}</span>
+            <button className="btn-ghost text-xs" disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}>Next →</button>
+          </div>
+        </div>
+      )}
 
       {/* Detail drawer */}
       {detail && (

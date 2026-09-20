@@ -4,6 +4,7 @@ import { dateTime, num, ugx } from '../lib/format'
 import type { Product, PurchasingRecord } from '../lib/types'
 import { EmptyState, PageHeader, Spinner } from '../components/ui'
 import { Field, Modal } from './InventoryPage'
+import { printHtml, escapeHtml } from '../lib/print'
 
 interface Line {
   product_id: string
@@ -21,8 +22,37 @@ function txnId(): string {
   })
 }
 
+/** Renders the open detail record (reorder list or consignment) into a printable PDF document. */
+function printDetail(tab: 'reorders' | 'consignments', d: PurchasingRecord): void {
+  const isReorder = tab === 'reorders'
+  const rows = d.items
+    .map((i) => {
+      const unit = Number(i.unit_cost) || 0
+      const qty = Number(i.qty) || 0
+      const isNew = (i as { new_product?: unknown }).new_product
+      return `<tr><td>${escapeHtml(i.sku || '')}</td><td>${escapeHtml(i.name || '')}${isNew ? ' <em>(new)</em>' : ''}</td><td class="num">${qty}</td><td class="num">${unit.toLocaleString('en-UG')}</td><td class="num">${(qty * unit).toLocaleString('en-UG')}</td></tr>`
+    })
+    .join('')
+  const value = d.items.reduce((s, i) => s + Number(i.qty) * (Number(i.unit_cost) || 0), 0)
+  const delivery = Number(d.delivery_cost || 0)
+  const title = isReorder ? d.title || 'Reorder list' : `Consignment ${d.reference || ''}`
+  let totals = `<tr><td colspan="4">Total (${d.items.length} line${d.items.length === 1 ? '' : 's'})</td><td class="num">${value.toLocaleString('en-UG')}</td></tr>`
+  if (!isReorder) {
+    totals += `<tr><td colspan="4">Delivery</td><td class="num">${delivery.toLocaleString('en-UG')}</td></tr>`
+    totals += `<tr><td colspan="4">Landed total</td><td class="num">${(value + delivery).toLocaleString('en-UG')}</td></tr>`
+  }
+  printHtml(
+    title,
+    `<h1>${escapeHtml(title)}</h1>
+<div class="meta">${isReorder ? 'Reorder list' : 'Received consignment'} · prepared by ${escapeHtml(d.created_by_name || '—')} · ${escapeHtml(dateTime(d.created_at))}${d.notes ? ` · ${escapeHtml(d.notes)}` : ''}${!isReorder && (d.source_reorder_title || d.source_reorder_id) ? ` · Fulfills: ${escapeHtml(d.source_reorder_title || 'Reorder list')}` : ''}</div>
+<table><thead><tr><th>SKU</th><th>Product</th><th class="num">Qty</th><th class="num">Unit cost</th><th class="num">Line total</th></tr></thead>
+<tbody>${rows}</tbody><tfoot>${totals}</tfoot></table>`,
+  )
+}
+
 export default function ReordersPage() {
   const [tab, setTab] = useState<'reorders' | 'consignments'>('reorders')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'processed' | 'fulfilled'>('all')
   const [records, setRecords] = useState<PurchasingRecord[] | null>(null)
   const [products, setProducts] = useState<Product[] | null>(null)
   const [showForm, setShowForm] = useState(false)
@@ -30,9 +60,9 @@ export default function ReordersPage() {
 
   const load = useCallback(async () => {
     setRecords(null)
-    const r = tab === 'reorders' ? await api.reorders() : await api.consignments()
+    const r = tab === 'reorders' ? await api.reorders(statusFilter) : await api.consignments()
     setRecords(r.records)
-  }, [tab])
+  }, [tab, statusFilter])
 
   useEffect(() => {
     load().catch(() => setRecords([]))
@@ -46,6 +76,19 @@ export default function ReordersPage() {
     () => (products || []).filter((p) => p.stock_qty <= p.reorder_level),
     [products],
   )
+
+  const [detail, setDetail] = useState<PurchasingRecord | null>(null)
+  // Per-status counts that power the badges on the filter buttons.
+  const [counts, setCounts] = useState<{ pending: number; processed: number; fulfilled: number; cancelled: number } | null>(null)
+
+  const loadCounts = useCallback(
+    () => api.reorderCounts().then((r) => setCounts(r.counts)).catch(() => setCounts(null)),
+    [],
+  )
+
+  useEffect(() => {
+    loadCounts()
+  }, [loadCounts, tab])
 
   const listValue = (r: PurchasingRecord) =>
     r.items.reduce((s, i) => s + i.qty * (Number(i.unit_cost) || 0), 0)
@@ -72,6 +115,33 @@ export default function ReordersPage() {
         )}
       </div>
 
+      {tab === 'reorders' && (
+        <div className="flex flex-wrap gap-2 mb-4">
+          {(['pending', 'processed', 'fulfilled'] as const).map((s) => {
+            const count = counts ? counts[s] : null
+            const showBadge = count !== null && count > 0 && s !== 'fulfilled'
+            return (
+              <button
+                key={s}
+                className={statusFilter === s ? 'btn-primary text-xs capitalize relative' : 'btn-ghost text-xs capitalize relative'}
+                onClick={() => setStatusFilter(s)}
+              >
+                {s === 'processed' ? 'Processing' : s}
+                {showBadge && (
+                  <span
+                    className={`absolute -top-1.5 -right-1.5 w-4 h-4 flex items-center justify-center text-[9px] font-bold text-white rounded-full ring-1 ring-slate-900 ${
+                      s === 'fulfilled' ? 'bg-emerald-500 ring-emerald-900' : 'bg-orange-500 ring-orange-900'
+                    }`}
+                  >
+                    {count > 9 ? '9+' : count}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       {error && <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-3">{error}</p>}
 
       <div className="card overflow-hidden">
@@ -95,10 +165,13 @@ export default function ReordersPage() {
               </thead>
               <tbody>
                 {records.map((r) => (
-                  <tr key={r.id} className="hover:bg-slate-800/30">
+                  <tr key={r.id} className="hover:bg-slate-800/30 cursor-pointer" onClick={() => setDetail(r)}>
                     <td className="td">
-                      <div className="font-medium text-white">{tab === 'reorders' ? r.title : r.reference}</div>
+                      <div className="font-medium text-white underline decoration-slate-600 underline-offset-2">{tab === 'reorders' ? r.title : r.reference}</div>
                       {r.notes && <div className="text-xs text-slate-500">{r.notes}</div>}
+                      {tab === 'consignments' && (r.source_reorder_title || r.source_reorder_id) && (
+                        <div className="text-[11px] text-sky-300">Fulfills: {r.source_reorder_title || 'Reorder list'}</div>
+                      )}
                     </td>
                     <td className="td text-slate-400 text-xs">
                       {r.items.map((i) => `${i.name} ×${i.qty}`).join(', ')}
@@ -135,6 +208,76 @@ export default function ReordersPage() {
           onClose={() => setShowForm(false)}
           onSaved={() => { setShowForm(false); setTab('reorders'); load() }}
         />
+      )}
+
+      {detail && (
+        <Modal
+          title={tab === 'reorders' ? (detail.title || 'Reorder list') : `Consignment ${detail.reference || ''}`}
+          onClose={() => setDetail(null)}
+        >
+          <p className="text-xs text-slate-500 -mt-2 mb-3 flex items-start justify-between gap-3">
+            <span>
+              {tab === 'reorders' ? 'Reorder list' : 'Received consignment'} · prepared by {detail.created_by_name || '—'} · {dateTime(detail.created_at)}
+              {tab === 'consignments' && (detail.source_reorder_title || detail.source_reorder_id) && (
+                <span className="text-sky-300"> · Fulfills: {detail.source_reorder_title || 'Reorder list'}</span>
+              )}
+              {detail.notes ? ` · ${detail.notes}` : ''}
+            </span>
+            <button
+              className="shrink-0 text-[11px] px-2.5 py-1 rounded-md border border-slate-700 text-slate-300 hover:border-brand-500/60 hover:text-brand-300"
+              onClick={() => printDetail(tab, detail)}
+            >
+              Print / PDF
+            </button>
+          </p>
+          <div className="overflow-x-auto card">
+            <table className="w-full">
+              <thead>
+                <tr>
+                  <th className="th">SKU</th>
+                  <th className="th">Product</th>
+                  <th className="th text-right">Qty</th>
+                  <th className="th text-right">Unit cost</th>
+                  <th className="th text-right">Line total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.items.map((i, idx) => {
+                  const unit = Number(i.unit_cost) || 0
+                  const qty = Number(i.qty) || 0
+                  return (
+                    <tr key={i.product_id || `new-${idx}`}>
+                      <td className="td font-mono text-xs text-brand-300">{i.sku}</td>
+                      <td className="td text-white">{i.name}{(i as { new_product?: unknown }).new_product ? <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded border border-sky-500/30 bg-sky-500/10 text-sky-300">new</span> : null}</td>
+                      <td className="td text-right tabular-nums">{qty.toLocaleString('en-UG')}</td>
+                      <td className="td text-right tabular-nums text-slate-400">{ugx(unit)}</td>
+                      <td className="td text-right tabular-nums">{ugx(qty * unit)}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex flex-wrap justify-end gap-4 mt-3 text-sm">
+            <span className="text-slate-500">{detail.items.length} item{detail.items.length === 1 ? '' : 's'}</span>
+            <span>
+              <span className="text-slate-500">{tab === 'reorders' ? 'Est. value' : 'Items total'}: </span>
+              <span className="text-white font-semibold">{ugx(tab === 'reorders' ? listValue(detail) : Number(detail.items_total || 0))}</span>
+            </span>
+            {tab === 'consignments' && (
+              <>
+                <span>
+                  <span className="text-slate-500">Delivery: </span>
+                  <span className="text-white font-semibold">{ugx(Number(detail.delivery_cost || 0))}</span>
+                </span>
+                <span>
+                  <span className="text-slate-500">Landed total: </span>
+                  <span className="text-brand-300 font-semibold">{ugx(Number(detail.items_total || 0) + Number(detail.delivery_cost || 0))}</span>
+                </span>
+              </>
+            )}
+          </div>
+        </Modal>
       )}
     </div>
   )
@@ -242,7 +385,7 @@ function ReorderForm({ products, onClose, onSaved }: { products: Product[]; onCl
           {lines.length === 0 && <div className="text-xs text-slate-600 text-center py-4">Nothing added yet.</div>}
           <div className="space-y-2 max-h-48 overflow-y-auto">
             {lines.map((l) => (
-              <div key={l.product_id} className="flex items-center gap-2 border border-slate-800 rounded-xl px-2.5 py-2">
+              <div key={l.product_id} className="flex items-center gap-2 border-2 border-sky-500 rounded-xl px-2.5 py-2">
                 <div className="min-w-0 flex-1">
                   <div className="text-sm text-white truncate">{l.name}</div>
                   <div className="text-[11px] text-slate-500 font-mono">{l.sku}</div>

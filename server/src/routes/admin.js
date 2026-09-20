@@ -1,6 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
-const { one, many, query } = require('../db');
+const { one, many, query, pool } = require('../db');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { audit } = require('../middleware/audit');
@@ -98,7 +98,7 @@ router.post('/products', requireRole(), requirePermission('inventory_entry'), as
     const rec = await one(
       `INSERT INTO products (sku, barcode, name, category, brand, supplier, cost_price, selling_price, stock_qty, min_stock, reorder_level)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [p.sku, p.barcode || null, p.name, p.category || 'Spare part', p.brand || null, p.supplier || null,
+      [p.sku, p.barcode || null, p.name, p.category || 'Spare Parts', p.brand || null, p.supplier || null,
        Number(p.cost_price) || 0, Number(p.selling_price) || 0, Number(p.stock_qty) || 0,
        Number(p.min_stock) || 5, Number(p.reorder_level) || 10]
     );
@@ -200,7 +200,291 @@ router.get('/bikes/lookup/:vin', async (req, res) => {
        FROM sales s JOIN users u ON u.id = s.cashier_id
       WHERE s.bike_id = $1 ORDER BY s.created_at DESC`, [bike.id]
   );
-  res.json({ bike, sales });
+    res.json({ bike, sales });
+});
+
+// ---------- Bike reservations & installments (admin) ----------
+// Reserve an E-bike for a customer with a down payment, then track each
+// installment until the bike is paid off completely. While an order is active
+// the bike is 'reserved'; once the balance reaches zero it flips to 'sold';
+// a 'released' reservation puts the bike back to 'in_stock'.
+const RES_SELECT = `
+  SELECT r.*, u.full_name AS reserved_by_name,
+         b.vin, b.model, b.color, b.year, b.status AS bike_status, b.selling_price,
+         c.full_name AS customer_name, c.phone AS customer_phone, c.email AS customer_email,
+         c.address AS customer_address, c.notes AS customer_notes
+`;
+const RES_FROM = `
+  FROM bike_reservations r
+  JOIN bikes b ON b.id = r.bike_id
+  JOIN customers c ON c.id = r.customer_id
+  LEFT JOIN users u ON u.id = r.reserved_by
+`;
+
+function shapeReservation(r) {
+  const payments = (Array.isArray(r.reservations_payments) ? r.reservations_payments : []).map((p) => ({
+    id: p.id, reservation_id: p.reservation_id, amount: Number(p.amount),
+    payment_method: p.payment_method, paid_by: p.paid_by, paid_by_name: p.paid_by_name,
+    transaction_ref: p.transaction_ref, note: p.note, created_at: p.created_at,
+  }));
+  return {
+    id: r.id, bike_id: r.bike_id, customer_id: r.customer_id,
+    reserved_by: r.reserved_by, reserved_by_name: r.reserved_by_name,
+    reserved_at: r.reserved_at, total_price: Number(r.total_price), down_payment: Number(r.down_payment),
+    balance: Number(r.balance), plan_months: Number(r.plan_months), status: r.status, notes: r.notes,
+    completed_at: r.completed_at, released_at: r.released_at,
+    created_at: r.created_at, updated_at: r.updated_at,
+    bike: r.vin != null ? { id: r.bike_id, vin: r.vin, model: r.model, color: r.color, status: r.bike_status, selling_price: Number(r.selling_price) } : undefined,
+    customer: r.customer_name != null ? { id: r.customer_id, full_name: r.customer_name, phone: r.customer_phone, email: r.customer_email, address: r.customer_address, notes: r.customer_notes } : undefined,
+    reservations_payments: payments,
+  };
+}
+
+// Single reservation with its payment trail (used by detail + after mutations)
+async function fetchReservation(id) {
+  const r = await one(`${RES_SELECT}${RES_FROM} WHERE r.id = $1`, [id]);
+  if (!r) return null;
+  const payments = await many(
+    `SELECT p.*, u.full_name AS paid_by_name
+       FROM bike_installment_payments p LEFT JOIN users u ON u.id = p.paid_by
+      WHERE p.reservation_id = $1 ORDER BY p.created_at`,
+    [id],
+  );
+  return shapeReservation({ ...r, reservations_payments: payments });
+}
+
+// List reservations (status defaults to 'active'), optionally searching VIN/customer.
+router.get('/reservations', requireRole(), async (req, res) => {
+  const { status = 'active', q = '' } = req.query;
+  const params = [];
+  let where = `WHERE 1=1`;
+  if (status) {
+    params.push(status);
+    where += ` AND r.status = $${params.length}`;
+  }
+  if (q) {
+    params.push(`%${q}%`);
+    where += ` AND (b.vin ILIKE $${params.length} OR b.model ILIKE $${params.length} OR c.full_name ILIKE $${params.length} OR COALESCE(c.phone,'') ILIKE $${params.length})`;
+  }
+  const reservations = await many(
+    `${RES_SELECT},
+        COALESCE((
+          SELECT json_agg(json_build_object(
+            'id', p.id, 'reservation_id', p.reservation_id, 'amount', p.amount,
+            'payment_method', p.payment_method, 'paid_by', p.paid_by, 'paid_by_name', pu.full_name,
+            'transaction_ref', p.transaction_ref, 'note', p.note, 'created_at', p.created_at
+          ) ORDER BY p.created_at)
+          FROM bike_installment_payments p LEFT JOIN users pu ON pu.id = p.paid_by
+          WHERE p.reservation_id = r.id
+        ), '[]'::json) AS reservations_payments
+     ${RES_FROM} ${where} ORDER BY r.reserved_at DESC LIMIT 200`,
+    params,
+  );
+  res.json({ reservations: reservations.map(shapeReservation) });
+});
+
+// Reservation detail with full payment history.
+router.get('/reservations/:id', requireRole(), async (req, res) => {
+  const reservation = await fetchReservation(req.params.id);
+  if (!reservation) return res.status(404).json({ error: 'Reservation not found' });
+  res.json({ reservation });
+});
+
+// Create a reservation: lock the bike, take the down payment, flip bike → 'reserved'.
+router.post('/reservations', requireRole(), async (req, res) => {
+  const { bike_id, customer_id, total_price, down_payment, plan_months, notes, payment_method, transaction_ref } = req.body || {};
+  if (!bike_id || !customer_id) return res.status(400).json({ error: 'bike_id and customer_id required' });
+  const tp = Number(total_price);
+  const dp = Number(down_payment);
+  const months = Number(plan_months) || 0;
+  if (!Number.isFinite(tp) || tp < 0) return res.status(400).json({ error: 'total_price must be a positive number' });
+  if (!Number.isFinite(dp) || dp <= 0) return res.status(400).json({ error: 'down_payment must be greater than 0' });
+  if (dp > tp) return res.status(400).json({ error: 'down_payment cannot exceed total_price' });
+
+  const client = await pool.connect();
+  let reservationId;
+  try {
+    await client.query('BEGIN');
+    const bike = await client.query(`SELECT id, status FROM bikes WHERE id = $1 FOR UPDATE`, [bike_id]);
+    if (!bike.rows[0]) throw Object.assign(new Error('Bike not found'), { status: 404 });
+    if (bike.rows[0].status !== 'in_stock') {
+      throw Object.assign(new Error(`Bike is ${bike.rows[0].status}; only in-stock bikes can be reserved`), { status: 400 });
+    }
+    const customer = await client.query(`SELECT id FROM customers WHERE id = $1`, [customer_id]);
+    if (!customer.rows[0]) throw Object.assign(new Error('Customer not found'), { status: 404 });
+
+    const balance = tp - dp;
+    const rec = await client.query(
+      `INSERT INTO bike_reservations (bike_id, customer_id, reserved_by, total_price, down_payment, balance, plan_months, status, notes)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,'active', $8) RETURNING *`,
+      [bike_id, customer_id, req.user.id, tp, dp, balance, months, notes || null],
+    );
+    const reservation = rec.rows[0];
+
+    // The down payment is the first installment — record it so every coin is traceable.
+    await client.query(
+      `INSERT INTO bike_installment_payments (reservation_id, amount, payment_method, paid_by, transaction_ref, note)
+        VALUES ($1,$2,$3,$4,$5,$6)`,
+      [reservation.id, dp, payment_method || 'cash', req.user.id, transaction_ref || null, notes || null],
+    );
+
+    // Flip the bike to 'reserved' so it can't be double-booked.
+    await client.query(
+      `UPDATE bikes SET status = 'reserved', reserved_at = now(), reserved_by = $1, updated_at = now()
+        WHERE id = $2`,
+      [req.user.id, bike_id],
+    );
+
+    await audit({ userId: req.user.id, action: 'create_reservation', entity: 'bike_reservation', entityId: reservation.id, newValue: reservation });
+    await client.query('COMMIT');
+    reservationId = reservation.id;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  } finally {
+    client.release();
+  }
+    const reservation = await fetchReservation(reservationId);
+  if (!reservation) return res.status(404).json({ error: 'Reservation not found after create' });
+  res.status(201).json({ reservation });
+});
+
+// Record an installment payment. When the balance clears the bike is paid off
+// completely and the reservation + bike are marked 'completed'/'sold'.
+router.post('/reservations/:id/payments', requireRole(), async (req, res) => {
+  const { amount, payment_method, transaction_ref, note } = req.body || {};
+  const amt = Number(amount);
+  if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'amount must be greater than 0' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query(`${RES_SELECT}${RES_FROM} WHERE r.id = $1 FOR UPDATE`, [req.params.id]);
+    if (!r.rows[0]) throw Object.assign(new Error('Reservation not found'), { status: 404 });
+    const resv = r.rows[0];
+    if (resv.status !== 'active') {
+      throw Object.assign(new Error(`Reservation is ${resv.status}; payments can only be recorded on active reservations`), { status: 400 });
+    }
+    const outstanding = Number(resv.balance);
+    if (amt > outstanding) throw Object.assign(new Error(`Payment exceeds outstanding balance (${outstanding})`), { status: 400 });
+
+    const pay = await client.query(
+      `INSERT INTO bike_installment_payments (reservation_id, amount, payment_method, paid_by, transaction_ref, note)
+        VALUES ($1,$2,$3,$4,$5,$6)
+        RETURNING id, reservation_id, amount, payment_method, paid_by, transaction_ref, note, created_at`,
+      [req.params.id, amt, payment_method || 'cash', req.user.id, transaction_ref || null, note || null],
+    );
+    const payment = { ...pay.rows[0], amount: Number(pay.rows[0].amount) };
+
+    const newBalance = outstanding - amt;
+    const willComplete = newBalance <= 0.01;
+    if (willComplete) {
+      await client.query(
+        `UPDATE bike_reservations SET status = 'completed', balance = 0, completed_at = now(), updated_at = now() WHERE id = $1`,
+        [req.params.id],
+      );
+      await client.query(
+        `UPDATE bikes SET status = 'sold', sold_at = now(), sold_price = $1, customer_id = $2 WHERE id = $3`,
+        [resv.total_price, resv.customer_id, resv.bike_id],
+      );
+      await audit({ userId: req.user.id, action: 'complete_reservation', entity: 'bike_reservation', entityId: req.params.id, oldValue: { status: resv.status }, newValue: { status: 'completed', balance: 0 } });
+    } else {
+      await client.query(
+        `UPDATE bike_reservations SET balance = GREATEST(0, balance - $1), updated_at = now() WHERE id = $2`,
+        [amt, req.params.id],
+      );
+    }
+    await audit({ userId: req.user.id, action: 'record_installment', entity: 'bike_installment_payment', entityId: payment.id, newValue: payment });
+    await client.query('COMMIT');
+
+        const reservation = await fetchReservation(req.params.id);
+    res.json({ payment, balance: willComplete ? 0 : newBalance, reservation });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  } finally {
+    client.release();
+  }
+});
+
+// Mark an active reservation as fully paid (only valid when balance = 0).
+router.post('/reservations/:id/complete', requireRole(), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query(`${RES_SELECT}${RES_FROM} WHERE r.id = $1 FOR UPDATE`, [req.params.id]);
+    if (!r.rows[0]) throw Object.assign(new Error('Reservation not found'), { status: 404 });
+    const resv = r.rows[0];
+    if (resv.status !== 'active') {
+      throw Object.assign(new Error(`Reservation is ${resv.status}; only active reservations can be completed`), { status: 400 });
+    }
+    if (Number(resv.balance) > 0.01) {
+      throw Object.assign(new Error(`Cannot complete reservation — balance of ${Number(resv.balance)} is still outstanding`), { status: 400 });
+    }
+    await client.query(
+      `UPDATE bike_reservations SET status = 'completed', balance = 0, completed_at = now(), updated_at = now() WHERE id = $1`,
+      [req.params.id],
+    );
+      await client.query(
+      `UPDATE bikes SET status = 'sold', sold_at = now(), sold_price = $1, customer_id = $2 WHERE id = $3`,
+      [resv.total_price, resv.customer_id, resv.bike_id],
+    );
+    await audit({ userId: req.user.id, action: 'complete_reservation', entity: 'bike_reservation', entityId: req.params.id, oldValue: { status: resv.status }, newValue: { status: 'completed' } });
+    await client.query('COMMIT');
+    const reservation = await fetchReservation(req.params.id);
+    res.json({ reservation });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  } finally {
+    client.release();
+  }
+});
+
+// Release an active reservation: the bike returns to 'in_stock' so it can be
+// re-sold (the reservation is kept for history as 'released').
+router.post('/reservations/:id/release', requireRole(), async (req, res) => {
+  const { note } = req.body || {};
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query(
+      `SELECT r.*, b.status AS bike_status FROM bike_reservations r JOIN bikes b ON b.id = r.bike_id WHERE r.id = $1 FOR UPDATE`,
+      [req.params.id],
+    );
+    if (!r.rows[0]) throw Object.assign(new Error('Reservation not found'), { status: 404 });
+    const resv = r.rows[0];
+    if (resv.status !== 'active') {
+      throw Object.assign(new Error(`Reservation is ${resv.status}; only active reservations can be released`), { status: 400 });
+    }
+    await client.query(
+      `UPDATE bike_reservations SET status = 'released', released_at = now(), updated_at = now() WHERE id = $1`,
+      [req.params.id],
+    );
+    await client.query(
+      `UPDATE bikes SET status = 'in_stock', reserved_at = NULL, reserved_by = NULL, updated_at = now() WHERE id = $1`,
+      [resv.bike_id],
+    );
+    if (note) {
+      await client.query(
+        `UPDATE bike_reservations SET notes = CASE WHEN notes IS NULL OR notes = '' THEN $1 ELSE notes || E'\n' || $1 END WHERE id = $2`,
+        [note, req.params.id],
+      );
+    }
+    await audit({ userId: req.user.id, action: 'release_reservation', entity: 'bike_reservation', entityId: req.params.id, oldValue: { status: resv.status }, newValue: { status: 'released', note: note || null } });
+    await client.query('COMMIT');
+    const reservation = await fetchReservation(req.params.id);
+    res.json({ reservation });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  } finally {
+    client.release();
+  }
 });
 
 // ---------- Customers ----------
@@ -299,12 +583,18 @@ router.get('/inventory/movements', async (req, res) => {
 // ---------- Approvals (admin/manager) ----------
 router.get('/approvals', requireRole(), async (req, res) => {
   const { status = 'pending' } = req.query;
+  const params = [];
+  let where = '';
+  if (status && status !== 'all') {
+    params.push(status);
+    where = 'WHERE a.status = $1';
+  }
   const approvals = await many(
     `SELECT a.*, u.full_name AS requested_by_name, d.full_name AS decided_by_name
        FROM approvals a
        LEFT JOIN users u ON u.id = a.requested_by
        LEFT JOIN users d ON d.id = a.decided_by
-      WHERE a.status = $1 ORDER BY a.created_at DESC LIMIT 200`, [status]
+      ${where} ORDER BY a.created_at DESC LIMIT 200`, params
   );
   res.json({ approvals });
 });
@@ -312,6 +602,20 @@ router.get('/approvals', requireRole(), async (req, res) => {
 router.post('/approvals/:id/decide', requireRole(), async (req, res) => {
   const { decision, note } = req.body || {};
   if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ error: 'decision must be approved|rejected' });
+
+  // Approving a reservation release executes the release first — the decision
+  // only lands if the bike actually returns to stock (it may already be gone).
+  if (decision === 'approved') {
+    const prior = await one('SELECT type, payload FROM approvals WHERE id = $1', [req.params.id]);
+    if (prior && prior.type === 'reservation_release') {
+      try {
+        const { releaseReservation } = require('../services/reservations');
+        await releaseReservation((prior.payload || {}).reservation_id, { note: note || null }, req.user);
+      } catch (err) {
+        return res.status(err.status || 409).json({ error: `Release failed: ${err.message}` });
+      }
+    }
+  }
 
   const rec = await one(
     `UPDATE approvals SET status=$2, decided_by=$3, decided_at=now(), note=$4

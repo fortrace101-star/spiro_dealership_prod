@@ -38,8 +38,8 @@ CREATE TABLE IF NOT EXISTS products (
   sku TEXT UNIQUE NOT NULL,
   barcode TEXT UNIQUE,
   name TEXT NOT NULL,
-  category TEXT NOT NULL DEFAULT 'Spare part'
-    CHECK (category IN ('Spare part','Accessory','Consumable')),
+    category TEXT NOT NULL DEFAULT 'Spare Parts'
+    CHECK (category IN ('Spare Parts','Accessories','Consumables','e-Bikes','e-Bikes Spare Parts','e-Bike','e-Bike Spare Parts','Spare Parts','Spare part','Accessory','Consumable')),
   brand TEXT,
   supplier TEXT,
   cost_price NUMERIC(12,2) NOT NULL DEFAULT 0,
@@ -205,28 +205,184 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log (created_at);
 
--- Incoming deliveries and shared purchasing requests. Items retain a historical snapshot.
-CREATE TABLE IF NOT EXISTS consignments (
+-- ============ BIKE RESERVATIONS (down payment + installments) ============
+CREATE TABLE IF NOT EXISTS bike_reservations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_txn_id UUID UNIQUE NOT NULL,
-  request_hash TEXT NOT NULL,
-  reference TEXT NOT NULL,
-  supplier TEXT NOT NULL,
-  delivery_cost NUMERIC(12,2) NOT NULL CHECK (delivery_cost >= 0),
-  items_total NUMERIC(12,2) NOT NULL CHECK (items_total >= 0),
-  items JSONB NOT NULL,
+  bike_id UUID NOT NULL REFERENCES bikes(id) ON DELETE CASCADE,
+  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  reserved_by UUID NOT NULL REFERENCES users(id),
+  reserved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  total_price NUMERIC(12,2) NOT NULL CHECK (total_price >= 0),
+  down_payment NUMERIC(12,2) NOT NULL CHECK (down_payment >= 0),
+  balance NUMERIC(12,2) NOT NULL CHECK (balance >= 0),
+  plan_months INTEGER NOT NULL DEFAULT 0 CHECK (plan_months >= 0),
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active','completed','released','expired')),
   notes TEXT,
-  created_by UUID NOT NULL REFERENCES users(id),
+  completed_at TIMESTAMPTZ,
+  released_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_reservations_bike ON bike_reservations (bike_id);
+CREATE INDEX IF NOT EXISTS idx_reservations_customer ON bike_reservations (customer_id);
+CREATE INDEX IF NOT EXISTS idx_reservations_status ON bike_reservations (status);
+
+CREATE TABLE IF NOT EXISTS bike_installment_payments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reservation_id UUID NOT NULL REFERENCES bike_reservations(id) ON DELETE CASCADE,
+  amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+  payment_method TEXT NOT NULL,
+  paid_by UUID REFERENCES users(id),
+  transaction_ref TEXT,
+  note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE TABLE IF NOT EXISTS reorder_lists (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_txn_id UUID UNIQUE NOT NULL,
-  request_hash TEXT NOT NULL,
-  title TEXT NOT NULL,
-  notes TEXT,
-  items JSONB NOT NULL,
-  created_by UUID NOT NULL REFERENCES users(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+CREATE INDEX IF NOT EXISTS idx_installments_reservation ON bike_installment_payments (reservation_id);
+
+-- ============ REVENUE RECORDS (all-time high tracking) ============
+-- Single-row table holding the highest single-day revenue recorded.
+CREATE TABLE IF NOT EXISTS revenue_records (
+  id INT PRIMARY KEY DEFAULT 1,
+  revenue NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (revenue >= 0),
+  date DATE NOT NULL DEFAULT CURRENT_DATE
 );
 
+-- Migration for older installs
+ALTER TABLE bikes ADD COLUMN IF NOT EXISTS reserved_at TIMESTAMPTZ;
+ALTER TABLE bikes ADD COLUMN IF NOT EXISTS reserved_by UUID REFERENCES users(id);
+
+-- ============ PURCHASING: REORDER LISTS & CONSIGNMENTS ============
+-- NOTE: these tables were referenced by the purchasing routes/services but
+-- were never declared in schema.sql. They are created here (idempotent) with
+-- the fulfillment columns that wire "receive stock" to an existing reorder list.
+CREATE TABLE IF NOT EXISTS reorder_lists (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_txn_id UUID NOT NULL UNIQUE,          -- idempotency key
+  request_hash TEXT,                           -- deterministic hash of the payload
+  title TEXT NOT NULL,
+  items JSONB NOT NULL DEFAULT '[]'::jsonb,    -- [{product_id,sku,name,qty,unit_cost,reorder_level,new_product?}]
+  notes TEXT,
+  created_by UUID NOT NULL REFERENCES users(id),
+  fulfilled BOOLEAN NOT NULL DEFAULT FALSE,    -- TRUE once a consignment receives the items
+  fulfilled_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'pending',      -- pending | processed | fulfilled | cancelled
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- CREATE TABLE IF NOT EXISTS is a no-op on databases where the table already
+-- exists from an earlier deploy (before fulfillment tracking was added), so the
+-- columns are (re-)declared here to keep old installs upgradeable in place.
+ALTER TABLE reorder_lists ADD COLUMN IF NOT EXISTS fulfilled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE reorder_lists ADD COLUMN IF NOT EXISTS fulfilled_at TIMESTAMPTZ;
+ALTER TABLE reorder_lists ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+-- ADD CONSTRAINT is not idempotent across restarts, so guard it explicitly.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'reorder_lists_status_check') THEN
+    ALTER TABLE reorder_lists ADD CONSTRAINT reorder_lists_status_check
+      CHECK (status IN ('pending', 'processed', 'fulfilled', 'cancelled'));
+  END IF;
+END $$;
+-- Lists fulfilled before the status column existed were stamped 'pending' by the
+-- ALTER default; backfill them so they stop counting as actionable everywhere.
+UPDATE reorder_lists SET status = 'fulfilled'
+WHERE fulfilled = TRUE AND status = 'pending';
+-- Older installs also predate the updated_at maintenance column.
+ALTER TABLE reorder_lists ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS idx_reorder_created ON reorder_lists (created_at);
+CREATE INDEX IF NOT EXISTS idx_reorder_fulfilled ON reorder_lists (fulfilled);
+CREATE INDEX IF NOT EXISTS idx_reorder_status ON reorder_lists (status);
+
+CREATE TABLE IF NOT EXISTS consignments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_txn_id UUID NOT NULL UNIQUE,          -- idempotency key
+  request_hash TEXT,
+  reference TEXT NOT NULL,                     -- delivery note / GRN
+  supplier TEXT NOT NULL,
+  delivery_cost NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (delivery_cost >= 0),
+  items_total NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (items_total >= 0),
+  items JSONB NOT NULL DEFAULT '[]'::jsonb,
+  notes TEXT,
+  source_reorder_id UUID REFERENCES reorder_lists(id),  -- links the received stock to the list it fulfilled
+  created_by UUID NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_consignment_created ON consignments (created_at);
+-- Same upgrade-in-place guard as reorder_lists above: older consignments tables
+-- may predate the fulfillment link, so the column is (re-)declared idempotently.
+ALTER TABLE consignments ADD COLUMN IF NOT EXISTS source_reorder_id UUID REFERENCES reorder_lists(id);
+-- Older installs also predate the updated_at maintenance column.
+ALTER TABLE consignments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS idx_consignment_source ON consignments (source_reorder_id);
+
+-- Existing DBs created before the category restructure keep working: legacy
+-- values are migrated to the canonical names, then the CHECK is re-widened.
+--   'Spare Parts' → 'Spare Parts'        (leaf under the I.C.E group)
+--   'Spare part'/'Accessory'/'Consumable' → plural canonical leaves
+--   'e-Bike' → 'e-Bikes' (major section), 'e-Bike Spare Parts' → 'e-Bikes Spare Parts'
+-- The constraint must be dropped BEFORE the UPDATEs: the old CHECK predates the
+-- canonical values, so writing 'Spare Parts' etc. would violate it mid-migration.
+ALTER TABLE products DROP CONSTRAINT IF EXISTS products_category_check;
+UPDATE products SET category = 'Spare Parts' WHERE category = 'Spare Parts';
+UPDATE products SET category = 'Spare Parts' WHERE category = 'Spare part';
+UPDATE products SET category = 'Accessories' WHERE category = 'Accessory';
+UPDATE products SET category = 'Consumables' WHERE category = 'Consumable';
+UPDATE products SET category = 'e-Bikes Spare Parts' WHERE category = 'e-Bike Spare Parts';
+UPDATE products SET category = 'e-Bikes' WHERE category = 'e-Bike';
+ALTER TABLE products ADD CONSTRAINT products_category_check
+  CHECK (category IN ('Spare Parts','Accessories','Consumables','e-Bikes','e-Bikes Spare Parts','e-Bike','e-Bike Spare Parts','Spare Parts','Spare part','Accessory','Consumable'));
+
+
+-- ============================================================
+-- EXPENSES SYSTEM (new)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS expense_categories (
+    id UUID PRIMARY KEY,
+    code TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    group_name TEXT NOT NULL,
+    description TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS expenses (
+    id UUID PRIMARY KEY,
+    client_txn_id TEXT UNIQUE,
+    category_id UUID NOT NULL REFERENCES expense_categories(id),
+    category_snapshot TEXT NOT NULL,
+    amount NUMERIC NOT NULL CHECK (amount > 0),
+    payment_method TEXT NOT NULL CHECK (payment_method IN ('cash','mobile_money','bank','card')),
+    payee TEXT,
+    receipt_ref TEXT,
+    expense_date DATE NOT NULL,
+    notes TEXT,
+    recorded_by UUID NOT NULL REFERENCES users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    voided BOOLEAN NOT NULL DEFAULT FALSE,
+    void_reason TEXT,
+    voided_at TIMESTAMPTZ,
+    voided_by UUID REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(expense_date);
+CREATE INDEX IF NOT EXISTS idx_expenses_recorded_by ON expenses(recorded_by);
+
+-- ============================================================
+-- ADMIN SETUP + RECOVERY CODES (new)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS admin_recovery_codes (
+    id UUID PRIMARY KEY,
+    code_hash TEXT NOT NULL UNIQUE,
+    created_by UUID NOT NULL REFERENCES users(id),
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ,
+    claimed_by UUID REFERENCES users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_recovery_codes_expires ON admin_recovery_codes(expires_at);

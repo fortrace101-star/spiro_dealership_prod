@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { dateTime, num, ugx } from '../lib/format'
 import type { Product, StockMovement } from '../lib/types'
-import { Badge, EmptyState, PageHeader, Spinner } from '../components/ui'
+import { EmptyState, PageHeader, Spinner } from '../components/ui'
+import { cn } from '../lib/cn'
 
-const EMPTY_FORM = { sku: '', barcode: '', name: '', category: 'Spare part', brand: '', supplier: '', cost_price: '', selling_price: '', stock_qty: '', min_stock: '5', reorder_level: '10' }
+const EMPTY_FORM = { sku: '', barcode: '', name: '', category: 'Spare Parts', brand: '', supplier: '', cost_price: '', selling_price: '', stock_qty: '', min_stock: '5', reorder_level: '10' }
 
 export default function InventoryPage() {
   const [products, setProducts] = useState<Product[] | null>(null)
@@ -124,7 +125,22 @@ export default function InventoryPage() {
                       <td className="td text-right text-brand-300">{margin.toFixed(0)}%</td>
                       <td className="td text-right font-semibold">{num(p.stock_qty)}</td>
                       <td className="td">
-                        {p.stock_qty === 0 ? <Badge kind="credit">Out</Badge> : isLow ? <Badge kind="pending">Low</Badge> : <Badge kind="in_stock">OK</Badge>}
+                        {p.stock_qty === 0 ? (
+                          <span className="inline-flex items-center gap-1.5 font-semibold text-red-400">
+                            <span className="h-2.5 w-2.5 rounded-full bg-red-400" />
+                            Out
+                          </span>
+                        ) : isLow ? (
+                          <span className="inline-flex items-center gap-1.5 font-semibold text-orange-400">
+                            <span className="h-2.5 w-2.5 rounded-full bg-orange-400" />
+                            Low
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-400">
+                            <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
+                            OK
+                          </span>
+                        )}
                       </td>
                       <td className="td text-right whitespace-nowrap">
                         <button className="btn-ghost text-xs px-2 py-1" onClick={() => openEdit(p)}>Edit</button>
@@ -152,7 +168,14 @@ export default function InventoryPage() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Field label="Category">
                 <select className="input" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                  <option>Spare part</option><option>Accessory</option><option>Consumable</option>
+                  <optgroup label="I.C.E Bike Spare Parts &amp; Accessories">
+                    <option>Spare Parts</option>
+                    <option>Accessories</option>
+                    <option>Consumables</option>
+                  </optgroup>
+                  <optgroup label="e-Bikes Spare Parts">
+                    <option>e-Bikes Spare Parts</option>
+                  </optgroup>
                 </select>
               </Field>
               <Field label="Brand"><input className="input" value={form.brand} onChange={(e) => setForm({ ...form, brand: e.target.value })} /></Field>

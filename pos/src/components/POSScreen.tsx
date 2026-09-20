@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/database'
 import { createSale, getTodaySales } from '../db/repos'
-import { api, clearSession, getDeviceId, getStoredUser } from '../lib/api'
+import { api, clearSession, getDeviceId, getStoredUser, normalizeCategory, type ProductCategory, type PurchasingRecord } from '../lib/api'
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner'
 import { useSyncStatus } from '../hooks/useSyncStatus'
 import { runSyncCycle } from '../services/sync'
@@ -13,6 +13,8 @@ import CheckoutModal from './CheckoutModal'
 import ReceiptModal from './ReceiptModal'
 import HistoryModal from './HistoryModal'
 import ReceivingScreen from './ReceivingScreen'
+import ReceiveSelectModal from './ReceiveSelectModal'
+import ReservationsModal from './ReservationsModal'
 import { cn } from '../lib/cn'
 
 export default function POSScreen() {
@@ -20,13 +22,36 @@ export default function POSScreen() {
   const sync = useSyncStatus()
   const cart = useCart()
   const [search, setSearch] = useState('')
+  const [major, setMajor] = useState<'ice' | 'ebikes' | 'ebikeparts'>('ice')
   const [category, setCategory] = useState<string>('All')
-  const [tab, setTab] = useState<'parts' | 'bikes'>('parts')
+  // Three major catalogue tabs at the same level, each wired to the canonical
+  // database categories via normalizeCategory: the I.C.E group (spare parts,
+  // accessories, consumables), the e-Bikes themselves, and e-Bike spare parts.
+  const iceCategories = ['Spare Parts', 'Accessories', 'Consumables'] as const
+  const MAJOR_SCOPE = {
+    ice: iceCategories,
+    ebikes: ['e-Bikes'] as const,
+    ebikeparts: ['e-Bikes Spare Parts'] as const,
+  }
+  // Sub-pills only refine the I.C.E tab; the other tabs map to a single
+  // database category each. Labels use the singular floor terms.
+  const iceSubPills = [
+    { label: 'All', value: 'All' },
+    { label: 'Spare Part', value: 'Spare Parts' },
+    { label: 'Accessory', value: 'Accessories' },
+    { label: 'Consumable', value: 'Consumables' },
+  ] as const
+  const showBikes = major === 'ebikes'
   const [showCheckout, setShowCheckout] = useState(false)
   const [receipt, setReceipt] = useState<LocalSale | null>(null)
   const [showHistory, setShowHistory] = useState(false)
-  const [stockMode, setStockMode] = useState<'receive' | 'reorder' | null>(null)
+  const [stockMode, setStockMode] = useState<'receive-select' | 'reorder' | 'receive' | null>(null)
+  const [sourceReorder, setSourceReorder] = useState<PurchasingRecord | null>(null)
+  const [showReservations, setShowReservations] = useState(false)
+  const [reserveBike, setReserveBike] = useState<Bike | null>(null)
+  const [showAccount, setShowAccount] = useState(false)
   const [canReceive, setCanReceive] = useState(false)
+  const [reorderCount, setReorderCount] = useState(0)
   const [flash, setFlash] = useState<string | null>(null)
 
   // Stock-in capability is granted per activation code; admins/managers always have it.
@@ -34,18 +59,15 @@ export default function POSScreen() {
     api.purchasingCatalog()
       .then((r) => setCanReceive(r.can_receive))
       .catch(() => setCanReceive(false))
-  }, [])
+    }, [])
 
-  const categories = useLiveQuery(
-    () =>
-      Promise.all([db.products.toArray(), db.categories.toArray()]).then(([products, dbCategories]) => {
-        const catSet = new Set<string>()
-        for (const p of products) catSet.add(p.category)
-        for (const c of dbCategories) if (typeof c === 'string') catSet.add(c)
-        return Array.from(catSet).sort()
-      }),
-    [],
-  )
+  // Count of unfulfilled reorder lists for the notification badge.
+  useEffect(() => {
+    api.reorders()
+      .then((r) => setReorderCount(r.records.length))
+      .catch(() => setReorderCount(0))
+    }, [])
+
   const products = useLiveQuery(() => db.products.toArray(), [])
   const bikes = useLiveQuery(() => db.bikes.where('status').equals('in_stock').toArray(), [])
   const todays = useLiveQuery(() => getTodaySales(), [])
@@ -59,17 +81,26 @@ export default function POSScreen() {
     }
   }, [todays])
 
-  const filtered = useMemo(() => {
+  const filteredParts = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (tab === 'bikes') {
-      return (bikes || []).filter((b) => !q || b.model.toLowerCase().includes(q) || b.vin.toLowerCase().includes(q))
-    }
+    // Each major tab maps onto the canonical database categories; a product
+    // can only surface under the tab that owns its category.
+    const scope: readonly ProductCategory[] = MAJOR_SCOPE[major]
     return (products || []).filter(
       (p) =>
-        (category === 'All' || p.category === category) &&
+        // normalizeCategory maps legacy values ('Spare part', 'I.C.E Bike Spare
+        // Parts', 'e-Bike', …) onto the canonical set so pre-migration offline
+        // stock still shows under the right section.
+        scope.includes(normalizeCategory(p.category) as ProductCategory) &&
+        (major !== 'ice' || category === 'All' || normalizeCategory(p.category) === category) &&
         (!q || p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || (p.barcode || '').includes(q)),
     )
-  }, [tab, products, bikes, search, category])
+  }, [products, search, category, major])
+
+  const filteredBikes = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return (bikes || []).filter((b) => !q || b.model.toLowerCase().includes(q) || b.vin.toLowerCase().includes(q))
+  }, [bikes, search])
 
   const addProduct = useCallback(
     (p: Product, qty = 1) => {
@@ -87,7 +118,7 @@ export default function POSScreen() {
     [cart],
   )
 
-  // Barcode scanner → local IndexedDB lookup (never a network round trip)
+  // Barcode scanner — local IndexedDB lookup (never a network round trip)
   useBarcodeScanner(
     useCallback(
       async (code: string) => {
@@ -162,7 +193,9 @@ export default function POSScreen() {
     <div className="h-full flex flex-col">
       {/* Status bar */}
       <header className="h-14 shrink-0 border-b border-slate-800/70 flex items-center px-4 gap-4 bg-[#0e1512]">
-        <img src="/logo.png" alt="Spiro" className="h-8 w-8 object-contain" />
+        <button type="button" onClick={() => setShowAccount(true)} title="Account" className="rounded-lg hover:opacity-80">
+          <img src="/logo.png" alt="Spiro" className="h-8 w-8 object-contain" />
+        </button>
         <div>
           <div className="text-sm font-bold text-white leading-tight">Spiro POS</div>
           <div className="text-[10px] text-slate-500">{getDeviceId()} · {user.full_name}</div>
@@ -187,51 +220,86 @@ export default function POSScreen() {
         <div className="ml-auto flex items-center gap-3 text-xs text-slate-400">
           <span>Today: <span className="text-white font-semibold">{todayStats.count}</span> sales · <span className="text-brand-300 font-semibold">{ugx(todayStats.revenue)}</span></span>
           <button className="btn-ghost text-xs" onClick={() => setShowHistory(true)}>History</button>
-          <button className="btn-ghost text-xs" onClick={() => setStockMode('receive')}>Receive stock</button>
-          <button className="btn-ghost text-xs" onClick={() => setStockMode('reorder')}>Reorder list</button>
           <button className="btn-ghost text-xs" onClick={() => void runSyncCycle('manual')} disabled={sync.syncing}>
             {sync.syncing ? 'Syncing…' : 'Sync now'}
           </button>
-          <button className="btn-ghost text-xs" onClick={() => { clearSession(); location.reload() }}>Sign out</button>
         </div>
       </header>
 
       <div className="flex-1 flex min-h-0">
         {/* Left: catalog */}
         <section className="flex-1 flex flex-col min-w-0 p-4 gap-3">
-          <div className="flex gap-2">
-            <button className={tab === 'parts' ? 'btn-primary text-xs' : 'btn-ghost text-xs'} onClick={() => setTab('parts')}>Spare parts & accessories</button>
-            <button className={tab === 'bikes' ? 'btn-primary text-xs' : 'btn-ghost text-xs'} onClick={() => setTab('bikes')}>Bikes 🛵</button>
+          {/* Major catalogue tabs sit above the search bar. */}
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex gap-2 w-fit">
+              <button className={cn('btn text-xs', major === 'ice' ? 'btn-primary' : 'btn-ghost')} onClick={() => { setMajor('ice'); setCategory('All') }}>I.C.E Bike Spare Parts &amp; Accessories</button>
+              <button className={cn('btn text-xs', major === 'ebikes' ? 'btn-primary' : 'btn-ghost')} onClick={() => { setMajor('ebikes'); setCategory('All') }}>e-Bikes</button>
+              <button className={cn('btn text-xs', major === 'ebikeparts' ? 'btn-primary' : 'btn-ghost')} onClick={() => { setMajor('ebikeparts'); setCategory('All') }}>e-Bike Spare Parts</button>
+            </div>
+            <div className="flex items-center gap-2">
+              <button className="btn-ghost text-xs" onClick={() => setStockMode('receive-select')} disabled={!canReceive}>Receive stock</button>
+              <button className="btn-ghost text-xs relative" onClick={() => setStockMode('reorder')}>
+                Reorder list
+                                {reorderCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 w-4 h-4 flex items-center justify-center text-[9px] font-bold text-white bg-orange-500 rounded-full ring-1 ring-slate-800">
+                    {reorderCount > 9 ? '9+' : reorderCount}
+                  </span>
+                )}
+              </button>
+            </div>
           </div>
-
           <input
             className="input"
-            placeholder={tab === 'parts' ? 'Search name / SKU — or just scan a barcode…' : 'Search model or VIN…'}
+            placeholder="Search name / SKU / VIN — or just scan a barcode…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
 
-          {tab === 'parts' && (
+          {/* Sub-pills refine the I.C.E tab only; the other tabs map to a single database category. */}
+          {major === 'ice' && (
             <div className="flex gap-1.5 flex-wrap">
-              {['All', ...(categories || [])].map((c) => (
+              {iceSubPills.map((s) => (
                 <button
-                  key={c}
-                  onClick={() => setCategory(c)}
+                  key={s.value}
+                  onClick={() => setCategory(s.value)}
                   className={cn(
-                    'px-3 py-1 rounded-full text-xs font-medium border transition',
-                    category === c ? 'bg-brand-500/15 text-brand-300 border-brand-500/40' : 'text-slate-400 border-slate-800 hover:border-slate-600',
+                    'px-3 py-1 rounded-full text-xs font-medium border transition whitespace-nowrap',
+                    category === s.value ? 'bg-brand-500/15 text-brand-300 border-brand-500/40' : 'text-slate-400 border-slate-800 hover:border-slate-600',
                   )}
                 >
-                  {c}
+                  {s.label}
                 </button>
               ))}
             </div>
           )}
 
-          <div className="flex-1 overflow-y-auto -mx-1 px-1">
-            {tab === 'parts' ? (
+          <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-4">
+            {showBikes ? (
+              <div className="grid grid-cols-2 xl:grid-cols-3 gap-2.5">
+                {filteredBikes.map((b) => (
+                  <div key={b.id} className="card p-4 hover:border-brand-500/50 transition flex flex-col">
+                    <button className="text-left flex-1" onClick={() => addBike(b)}>
+                      <div className="text-sm font-bold text-white">{b.model}</div>
+                      <div className="text-xs text-slate-500">{b.color} {b.year ? `· ${b.year}` : ''}</div>
+                      <div className="text-[10px] font-mono text-slate-600 mt-1">{b.vin}</div>
+                      <div className="text-brand-300 font-bold mt-2">{ugx(b.selling_price)}</div>
+                      {b.battery_spec && <div className="text-[10px] text-slate-500 mt-1">🔋 {b.battery_spec}</div>}
+                    </button>
+                    <button
+                      className="mt-3 w-full text-xs font-semibold px-2 py-1.5 rounded-lg border border-brand-500/40 text-brand-300 hover:bg-brand-500/10 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                      disabled={!sync.online}
+                      title={sync.online ? 'Take a down payment and reserve this bike on an installment plan' : 'Reservations need a connection'}
+                      onClick={() => { setReserveBike(b); setShowReservations(true) }}
+                    >
+                      Reserve · down payment
+                    </button>
+                  </div>
+                ))}
+                {filteredBikes.length === 0 && <div className="col-span-full text-center text-sm text-slate-600 py-10">No bikes available in local catalog.</div>}
+              </div>
+            ) : (
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
-                {(filtered as Product[]).map((p) => {
+                {filteredParts.map((p) => {
                   const out = p.stock_qty <= 0
                   return (
                     <button
@@ -247,27 +315,25 @@ export default function POSScreen() {
                       <div className="text-sm font-semibold text-white mt-0.5 leading-snug line-clamp-2">{p.name}</div>
                       <div className="flex items-end justify-between mt-2">
                         <span className="text-brand-300 font-bold text-sm">{ugx(p.selling_price)}</span>
-                        <span className={cn('text-[10px]', p.stock_qty <= p.reorder_level ? 'text-amber-400' : 'text-slate-500')}>
+                        {/* Worded stock level, as before: amber at/below reorder level, slate otherwise. */}
+                        <span
+                          title={out ? 'Out of stock' : `${p.stock_qty} in stock${p.stock_qty <= p.reorder_level ? ' (low)' : ''}`}
+                          className={cn(
+                            'text-[10px] font-medium shrink-0',
+                            out
+                              ? 'text-red-400'
+                              : p.stock_qty <= p.reorder_level
+                                ? 'text-orange-400'
+                                : 'text-slate-500',
+                          )}
+                        >
                           {out ? 'Out of stock' : `${p.stock_qty} in stock`}
                         </span>
                       </div>
                     </button>
                   )
                 })}
-                {filtered.length === 0 && <div className="col-span-full text-center text-sm text-slate-600 py-10">No products match. Sync when online to refresh catalog.</div>}
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 xl:grid-cols-3 gap-2.5">
-                {(filtered as Bike[]).map((b) => (
-                  <button key={b.id} onClick={() => addBike(b)} className="card p-4 text-left hover:border-brand-500/50 transition">
-                    <div className="text-sm font-bold text-white">{b.model}</div>
-                    <div className="text-xs text-slate-500">{b.color} {b.year ? `· ${b.year}` : ''}</div>
-                    <div className="text-[10px] font-mono text-slate-600 mt-1">{b.vin}</div>
-                    <div className="text-brand-300 font-bold mt-2">{ugx(b.selling_price)}</div>
-                    {b.battery_spec && <div className="text-[10px] text-slate-500 mt-1">🔋 {b.battery_spec}</div>}
-                  </button>
-                ))}
-                {filtered.length === 0 && <div className="col-span-full text-center text-sm text-slate-600 py-10">No bikes available in local catalog.</div>}
+                {filteredParts.length === 0 && <div className="col-span-full text-center text-sm text-slate-600 py-10">No products match. Sync when online to refresh catalog.</div>}
               </div>
             )}
           </div>
@@ -294,7 +360,7 @@ export default function POSScreen() {
                     <div className="text-sm font-medium text-white truncate">{i.name}</div>
                     {i.sku && <div className="text-[10px] font-mono text-slate-500">{i.sku}</div>}
                   </div>
-                  <button className="text-slate-600 hover:text-red-400 text-xs" onClick={() => cart.removeItem(i.key)}>✕</button>
+                  <button className="text-slate-600 hover:text-red-400 text-xs" onClick={() => cart.removeItem(i.key)}>×</button>
                 </div>
                 <div className="flex items-center justify-between mt-2">
                   {i.kind === 'bike' ? (
@@ -342,6 +408,25 @@ export default function POSScreen() {
         </div>
       )}
 
+      {/* Account popup (logo click) */}
+      {showAccount && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center p-4" onClick={() => setShowAccount(false)}>
+          <div className="absolute inset-0 bg-black/70" />
+          <div className="relative card w-full max-w-xs p-5 text-center" onClick={(e) => e.stopPropagation()}>
+            <img src="/logo.png" alt="Spiro" className="h-12 w-12 object-contain mx-auto" />
+            <div className="text-sm font-semibold text-white mt-2">{user.full_name}</div>
+            <div className="text-[11px] text-slate-500">{getDeviceId()}</div>
+            <button
+              className="btn-danger w-full mt-4"
+              onClick={() => { setShowAccount(false); clearSession(); location.reload() }}
+            >
+              Sign out
+            </button>
+            <button className="btn-ghost w-full mt-2" onClick={() => setShowAccount(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
       {showCheckout && (
         <CheckoutModal
           totals={totals}
@@ -354,16 +439,47 @@ export default function POSScreen() {
 
       {showHistory && <HistoryModal onClose={() => setShowHistory(false)} />}
 
-      {stockMode && (
+      {showReservations && (
+        <ReservationsModal
+          prefillBike={reserveBike}
+          onClose={() => setShowReservations(false)}
+          onFlash={(msg) => {
+            setFlash(msg)
+            void runSyncCycle('after-reservation')
+          }}
+        />
+      )}
+
+      {stockMode === 'receive-select' && canReceive && (
+        <ReceiveSelectModal
+          onClose={() => setStockMode(null)}
+          onSelect={(r) => { setSourceReorder(r); setStockMode('receive') }}
+          onNew={() => { setSourceReorder(null); setStockMode('receive') }}
+        />
+      )}
+
+      {stockMode === 'receive' && canReceive && (
         <ReceivingScreen
-          mode={stockMode}
+          key={'receive-' + (sourceReorder?.id || 'new')}
+          mode="receive"
+          canReceive={canReceive}
+          sourceReorder={sourceReorder || undefined}
+          onClose={() => { setStockMode(null); setSourceReorder(null) }}
+          onDone={(message) => {
+            setStockMode(null); setSourceReorder(null); setFlash(message)
+            void runSyncCycle('after-receive')
+            // Refresh the reorder-list badge count — fulfilled lists are now excluded.
+            api.reorders().then((r) => setReorderCount(r.records.length)).catch(() => setReorderCount(0))
+          }}
+        />
+      )}
+
+      {stockMode === 'reorder' && canReceive && (
+        <ReceivingScreen
+          mode="reorder"
           canReceive={canReceive}
           onClose={() => setStockMode(null)}
-          onDone={(message) => {
-            setStockMode(null)
-            setFlash(message)
-            void runSyncCycle('manual')
-          }}
+          onDone={(message) => { setStockMode(null); setFlash(message); void runSyncCycle('after-receive') }}
         />
       )}
     </div>

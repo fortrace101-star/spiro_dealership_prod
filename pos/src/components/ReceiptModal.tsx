@@ -57,8 +57,8 @@ function buildReceiptHTML(
   `
 }
 
-// Render receipt to an off-screen container, then convert to canvas/JPG blob
-async function exportReceiptAsImage(sale: LocalSale, items: LocalSaleItem[], displayReceipt: string) {
+// Render receipt to an off-screen container, then convert to canvas
+async function renderReceiptCanvas(sale: LocalSale, items: LocalSaleItem[], displayReceipt: string) {
   const html = buildReceiptHTML(sale, items, displayReceipt)
   const container = document.createElement('div')
   container.innerHTML = html
@@ -73,19 +73,12 @@ async function exportReceiptAsImage(sale: LocalSale, items: LocalSaleItem[], dis
 
   const canvas = await html2canvas(container, { scale: 2, backgroundColor: '#fff' })
   document.body.removeChild(container)
-
-  // JPG export
-  const jpgUrl = canvas.toDataURL('image/jpeg', 0.9)
-  const link = document.createElement('a')
-  link.href = jpgUrl
-  link.download = `receipt-${displayReceipt}.jpg`
-  link.click()
-
   return canvas
 }
 
-// PDF export: use the canvas rendered above and embed as image in A4
-async function exportReceiptAsPDF(canvas: any, displayReceipt: string) {
+// PDF export: render receipt to A4 PDF directly (PDF only — no JPG download)
+async function exportReceiptAsPDF(sale: LocalSale, items: LocalSaleItem[], displayReceipt: string) {
+  const canvas = await renderReceiptCanvas(sale, items, displayReceipt)
   const imgData = canvas.toDataURL('image/jpeg', 0.9)
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt' })
   const pageWidth = pdf.internal.pageSize.getWidth()
@@ -108,15 +101,13 @@ export default function ReceiptModal({ sale, onClose }: { sale: LocalSale; onClo
   const displayReceipt = sale.server_receipt_no || sale.receipt_no
 
     async function handlePrint() {
-    // Trigger JPG and PDF downloads
     try {
-      const canvas = await exportReceiptAsImage(sale, items, displayReceipt)
-      await exportReceiptAsPDF(canvas, displayReceipt)
+      await exportReceiptAsPDF(sale, items, displayReceipt)
     } catch (err) {
       console.error('[receipt] export failed:', err)
       alert('Export failed — see browser console.')
     }
-    
+
     // Then open print dialog
     const w = window.open('', 'PRINT', 'height=600,width=400')
     if (!w) return

@@ -44,10 +44,14 @@ router.get('/changes', requireAuth, async (req, res) => {
        FROM bikes WHERE updated_at > $1 ORDER BY updated_at LIMIT 1000`, [since.toISOString()]
   );
   const categories = await many(`SELECT DISTINCT category FROM products WHERE active = TRUE`);
+  const customers = await many(
+    `SELECT id, full_name, phone, email, address, notes, created_at FROM customers ORDER BY full_name`
+  );
   res.json({
     products,
     bikes,
     categories: categories.map((c) => c.category),
+    customers,
     cursor: Date.now(),
     server_time: new Date().toISOString(),
   });
@@ -64,10 +68,14 @@ router.get('/bootstrap', requireAuth, async (req, res) => {
        FROM bikes WHERE status = 'in_stock' ORDER BY model`
   );
   const categories = await many(`SELECT DISTINCT category FROM products WHERE active = TRUE`);
+  const customers = await many(
+    `SELECT id, full_name, phone, email, address, notes, created_at FROM customers ORDER BY full_name`
+  );
   res.json({
     products,
     bikes,
     categories: categories.map((c) => c.category),
+    customers,
     cursor: Date.now(),
     server_time: new Date().toISOString(),
   });

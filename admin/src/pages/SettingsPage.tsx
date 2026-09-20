@@ -136,10 +136,17 @@ export default function SettingsPage() {
       {/* Notifications */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
         <div className="card p-5">
-          <h3 className="font-semibold text-white mb-2">🔔 Web Push notifications</h3>
+          <h3 className="font-semibold text-white mb-2">🔔 Notifications</h3>
           <p className="text-sm text-slate-500 mb-4">
-            Status: <span className="capitalize text-slate-300">{push.state}</span>. You'll get a notification on this device for every sale the POS records.
+            Status: <span className="capitalize text-slate-300">{push.state}</span>. You'll get a notification on this device for:
           </p>
+          <ul className="text-sm text-slate-400 space-y-1 mb-4">
+            <li>• <strong>Sales</strong> — every POS sale completed (receipt no., amount, payment method, cashier)</li>
+            <li>• <strong>Low-stock warnings</strong> — a product drops to or below its reorder level</li>
+            <li>• <strong>Stock-outs</strong> — a product hits zero stock</li>
+            <li>• <strong>Approval requests</strong> — discounts above 5% and credit sales that need a manager's decision</li>
+            <li>• <strong>Daily revenue records</strong> — when today's revenue breaks the all-time high</li>
+          </ul>
           <div className="flex gap-2">
             {push.state !== 'subscribed' && (
               <button className="btn-primary" onClick={() => push.enable()} disabled={push.busy}>

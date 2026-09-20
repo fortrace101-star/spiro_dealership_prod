@@ -82,11 +82,73 @@ export interface LocalSale {
   synced_at: string | null
 }
 
+export interface Customer {
+  id: string
+  full_name: string
+  phone: string | null
+  email: string | null
+  address: string | null
+  notes: string | null
+  created_at: string
+}
+
 export interface SessionUser {
   id: string
   full_name: string
   role: string
   permissions?: string[]
+}
+
+export interface ReservationBikeMini {
+  id: string
+  vin: string
+  model: string
+  color: string | null
+  status: string
+  selling_price: number
+}
+
+export interface ReservationCustomerMini {
+  id: string
+  full_name: string
+  phone: string | null
+  email?: string | null
+  address?: string | null
+  notes?: string | null
+}
+
+export interface InstallmentPayment {
+  id: string
+  reservation_id: string
+  amount: number
+  payment_method: string
+  paid_by: string | null
+  paid_by_name?: string | null
+  transaction_ref: string | null
+  note: string | null
+  created_at: string
+}
+
+export interface BikeReservation {
+  id: string
+  bike_id: string
+  customer_id: string
+  reserved_by: string | null
+  reserved_by_name?: string | null
+  reserved_at: string
+  total_price: number
+  down_payment: number
+  balance: number
+  plan_months: number
+  status: 'active' | 'completed' | 'released' | 'expired'
+  notes: string | null
+  completed_at: string | null
+  released_at: string | null
+  created_at: string
+  updated_at: string
+  bike?: ReservationBikeMini
+  customer?: ReservationCustomerMini
+  reservations_payments?: InstallmentPayment[]
 }
 
 export interface SyncQueueEntry {

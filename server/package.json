@@ -11,7 +11,7 @@
     "smoke": "node scripts/smoke-test.js",
     "test:activation": "node scripts/activation-email-test.js",
     "test:activation:db": "node scripts/activation-db-test.js",
-    "test:purchasing": "node scripts/receiving-db-test.js && node scripts/reorder-db-test.js",
+    "test:purchasing": "node scripts/receiving-db-test.js && node scripts/reorder-db-test.js && node scripts/reorder-new-product-test.js",
     "test:staff": "node scripts/staff-permission-db-test.js",
     "test:sales": "node scripts/sale-reference-db-test.js",
     "test:offline": "node scripts/offline-lifecycle-test.js"

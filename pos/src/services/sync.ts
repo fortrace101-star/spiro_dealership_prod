@@ -2,7 +2,7 @@ import { api } from '../lib/api'
 import { db } from '../db/database'
 import {
   countPendingSales, getPendingSales, getSetting, incrementSaleAttempts,
-  markSaleSynced, saveCatalog, setSetting,
+  markSaleSynced, saveCatalog, saveCustomers, setSetting,
 } from '../db/repos'
 import type { LocalSale, LocalSaleItem } from '../lib/types'
 
@@ -109,11 +109,12 @@ async function pullChanges(): Promise<void> {
   // The server also sends every sellable id, so local rows it no longer has
   // (deleted product, sold bike, reset dataset) stop being sold here.
   await saveCatalog(res.products, res.bikes, res.categories)
+  await saveCustomers(res.customers)
   await setSetting('sync_cursor', res.cursor)
 }
 
 /** One full sync cycle: health check → push pending → pull changes. */
-export async function runSyncCycle(reason: 'interval' | 'online-event' | 'manual' | 'after-sale'): Promise<void> {
+export async function runSyncCycle(reason: 'interval' | 'online-event' | 'manual' | 'after-sale' | 'after-reservation' | 'after-receive'): Promise<void> {
   if (status.syncing) return
   update({ syncing: true, lastAttemptAt: new Date().toISOString() })
   try {
