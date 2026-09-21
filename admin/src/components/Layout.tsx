@@ -27,21 +27,22 @@ function NavBadges({ badges }: { badges: Array<{ count: number | null; title: st
   const visible = badges.filter((b) => b.count != null && b.count > 0)
   if (visible.length === 0) return null
   return (
-    <>
-      {visible.map((b, i) => (
+    // Notification-style: pinned to the nav row's top-right corner instead of
+    // sitting inline with the label, matching the purchasing filter badges.
+    <span className="absolute top-1 right-1.5 flex gap-1">
+      {visible.map((b) => (
         <span
           key={b.title}
           title={b.title}
           className={cn(
-            'min-w-[20px] text-center text-[10px] font-bold px-1.5 py-0.5 rounded-full',
-            i === 0 && 'ml-auto',
+            'min-w-[18px] text-center text-[10px] font-bold px-1 py-0.5 rounded-full',
             b.className,
           )}
         >
           {(b.count as number) > 99 ? '99+' : b.count}
         </span>
       ))}
-    </>
+    </span>
   )
 }
 
@@ -154,7 +155,7 @@ export default function Layout() {
               onClick={() => setNavOpen(false)}
               className={({ isActive }) =>
                 cn(
-                  'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition',
+                  'relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition',
                   isActive ? 'bg-brand-500/15 text-brand-300' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50',
                 )
               }
@@ -164,7 +165,7 @@ export default function Layout() {
               </svg>
               {item.label}
               {item.to === '/approvals' && approvalCount !== null && approvalCount > 0 && (
-                <span className="ml-auto min-w-[20px] text-center text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                <span className="absolute top-1 right-1.5 min-w-[18px] text-center text-[10px] font-bold px-1 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
                   {approvalCount > 99 ? '99+' : approvalCount}
                 </span>
               )}
@@ -198,9 +199,12 @@ export default function Layout() {
               Sale alerts on
             </div>
           ) : (
-            <button onClick={() => push.enable()} disabled={push.busy || push.state === 'unsupported'} className="btn-ghost w-full text-xs">
-              🔔 Enable alerts
-            </button>
+            <>
+              <button onClick={() => void push.enable()} disabled={push.busy || push.state === 'unsupported'} className="btn-ghost w-full text-xs">
+                {push.busy ? 'Enabling…' : push.state === 'unsupported' ? '🔔 Alerts not supported' : '🔔 Enable alerts'}
+              </button>
+              {push.error && <p className="px-1 text-[11px] leading-snug text-red-400">{push.error}</p>}
+            </>
           )}
           {/* DEV ONLY — remove before production */}
           <button

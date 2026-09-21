@@ -86,7 +86,7 @@ async function main() {
       supplier: 'Test supplier',
       delivery_cost: 0,
       notes: '',
-      source_reorder_id: list.id,
+      source_list_id: list.id,
       items: [{
         product_id: null, qty: 10, unit_cost: 15000,
         new_product: { sku, name: 'Planned brake pad', barcode: '', category: 'Spare Parts', selling_price: 25000, min_stock: 5, reorder_level: 10 },

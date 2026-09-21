@@ -1,5 +1,6 @@
 const { createHash } = require('node:crypto');
 const { pool } = require('../db');
+const { notifyAdmins, restockNotification } = require('./push');
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
 function text(value, label, required = true) {
   if (typeof value !== 'string' || value.trim().length > 500 || (required && !value.trim())) fail(`${label} is required (maximum 500 characters)`);
@@ -108,26 +109,31 @@ async function save(kind, input, user, db = pool) {
     }
         // When receiving a consignment that fulfills an existing reorder list, lock
     // and validate the source list, then record the link + mark it fulfilled.
-    const sourceReorderId = receiving ? (input.source_reorder_id || null) : null;
-    if (sourceReorderId) {
-      uuid(sourceReorderId);
+    const sourceListId = receiving ? (input.source_list_id || null) : null;
+    if (sourceListId) {
+      uuid(sourceListId);
       const existing = (
-        await client.query('SELECT id, fulfilled FROM reorder_lists WHERE id=$1 FOR UPDATE', [sourceReorderId])
+        await client.query('SELECT id, fulfilled FROM reorder_lists WHERE id=$1 FOR UPDATE', [sourceListId])
       ).rows[0];
       if (!existing) fail('Source reorder list not found', 404);
       if (existing.fulfilled) fail('This reorder list has already been fulfilled', 409);
     }
     const record = (await client.query(receiving
-      ? `INSERT INTO consignments (client_txn_id,request_hash,reference,supplier,delivery_cost,items_total,items,notes,source_reorder_id,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`
+      ? `INSERT INTO consignments (client_txn_id,request_hash,reference,supplier,delivery_cost,items_total,items,notes,source_list_id,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`
       : `INSERT INTO reorder_lists (client_txn_id,request_hash,title,items,notes,created_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`, receiving
-      ? [input.client_txn_id, hash, title, supplier, delivery, cents / 100, JSON.stringify(items), notes, sourceReorderId, user.id]
+      ? [input.client_txn_id, hash, title, supplier, delivery, cents / 100, JSON.stringify(items), notes, sourceListId, user.id]
       : [input.client_txn_id, hash, title, JSON.stringify(items), notes, user.id])).rows[0];
     await client.query('INSERT INTO audit_log (user_id,action,entity,entity_id) VALUES ($1,$2,$3,$4)', [user.id, 'create', kind, record.id]);
-    if (sourceReorderId) {
-      await client.query("UPDATE reorder_lists SET fulfilled=TRUE, status='fulfilled', fulfilled_at=now(), updated_at=now() WHERE id=$1", [sourceReorderId]);
-      await client.query('INSERT INTO audit_log (user_id,action,entity,entity_id) VALUES ($1,$2,$3,$4)', [user.id, 'fulfill_reorder', 'reorder_lists', sourceReorderId]);
+    if (sourceListId) {
+      await client.query("UPDATE reorder_lists SET fulfilled=TRUE, status='fulfilled', fulfilled_at=now(), updated_at=now() WHERE id=$1", [sourceListId]);
+      await client.query('INSERT INTO audit_log (user_id,action,entity,entity_id) VALUES ($1,$2,$3,$4)', [user.id, 'fulfill_reorder', 'reorder_lists', sourceListId]);
     }
     await client.query('COMMIT');
+    // Restock alert: fulfilling a reorder list means stock arrived — notify admins
+    // after commit so a push failure can never roll back the consignment itself.
+    if (sourceListId) {
+      setImmediate(() => { notifyAdmins(restockNotification(record)).catch(() => {}) });
+    }
     return { record, duplicate: false };
   } catch (err) {
     await client.query('ROLLBACK');
@@ -135,7 +141,7 @@ async function save(kind, input, user, db = pool) {
     throw err;
   } finally { client.release(); }
 }
-// Next reorder-list reference in the business format RL-19-Sep-26-01.
+// Next reorder-list default title in the format Reorder - 20 Sep - 01.
 // The sequence is the number of lists already created today (+1) so multiple
 // POS devices get an authoritative, mostly-monotonic value from the server.
 async function nextReorderRef(db = pool) {
@@ -143,12 +149,11 @@ async function nextReorderRef(db = pool) {
   const d = new Date();
   const dd = String(d.getDate()).padStart(2, '0');
   const mon = d.toLocaleString('en-US', { month: 'short' });
-  const yy = String(d.getFullYear()).slice(-2);
   const count = await runner.query(
     `SELECT COUNT(*)::int AS n FROM reorder_lists WHERE created_at >= date_trunc('day', now())`,
   );
   const seq = String((count.rows[0]?.n || 0) + 1).padStart(2, '0');
-  return `RL-${dd}-${mon}-${yy}-${seq}`;
+  return `Reorder - ${dd} ${mon} - ${seq}`;
 }
 
 module.exports = { save, nextReorderRef };

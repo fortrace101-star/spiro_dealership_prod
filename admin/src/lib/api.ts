@@ -1,6 +1,6 @@
 import type {
   ActivationCode, Approval, AuditEntry, Bike, BikeReservation, Customer, CustomerBikeLink, InstallmentPayment,
-  Product, PurchasingRecord, RangeReport,
+  Product, PurchasingListItem, PurchasingRecord, RangeReport,
   Sale, SaleItem, StockMovement, TodayReport, HourlyPoint, User, VinLookupResult,
 } from './types'
 
@@ -165,11 +165,25 @@ export const api = {
   reorders: (status?: string) => request<{ records: PurchasingRecord[] }>(`/api/purchasing/reorders${status && status !== 'all' ? `?status=${encodeURIComponent(status)}` : ''}`),
   reorderCounts: () => request<{ counts: { pending: number; processed: number; fulfilled: number; cancelled: number } }>('/api/purchasing/reorders/counts'),
   consignments: () => request<{ records: PurchasingRecord[] }>('/api/purchasing/consignments'),
-  createReorder: (payload: { title: string; notes: string; client_txn_id: string; items: { product_id: string; qty: number }[] }) =>
+  createConsignment: (payload: {
+    reference: string
+    supplier: string
+    delivery_cost: number
+    notes: string
+    client_txn_id: string
+    items: PurchasingListItem[]
+    source_list_id?: string | null
+  }) =>
+    request<{ record: PurchasingRecord; duplicate: boolean }>('/api/purchasing/consignments', { method: 'POST', body: JSON.stringify(payload) }),
+  createReorder: (payload: { title: string; notes: string; client_txn_id: string; items: PurchasingListItem[] }) =>
     request<{ record: PurchasingRecord; duplicate: boolean }>('/api/purchasing/reorders', { method: 'POST', body: JSON.stringify(payload) }),
 
-  // Reorder-list lifecycle: pending -> processed (list prepared) -> fulfilled (stock received).
-  // 'cancelled' retires a list the shop decided not to order after all.
+  nextReorderRef: () => request<{ title: string }>('/api/purchasing/reorders/next-ref'),
+
+  // Reorder-list lifecycle: pending -> processed (list prepared) -> fulfilled.
+  // 'fulfilled' is NOT set directly — it happens server-side when a consignment
+  // referencing the list (source_list_id) is received. 'cancelled' retires a
+  // list the shop decided not to order after all.
   updateReorderStatus: (id: string, status: 'pending' | 'processed' | 'cancelled') =>
     request<{ ok: boolean }>(`/api/purchasing/reorders/${id}/status`, {
       method: 'PATCH',

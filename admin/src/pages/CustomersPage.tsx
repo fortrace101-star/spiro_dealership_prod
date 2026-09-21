@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import { dateTime, PAYMENT_LABELS, ugx } from '../lib/format'
+import { compactUgx, dateTime, PAYMENT_LABELS, ugx } from '../lib/format'
 import type { Customer, Sale, SaleItem } from '../lib/types'
 import { Badge, EmptyState, PageHeader, Spinner } from '../components/ui'
 import { Field, Modal } from './InventoryPage'
@@ -87,8 +87,8 @@ export default function CustomersPage() {
                 <tr>
                   <th className="th">Customer</th>
                   <th className="th">Phone</th>
-                  <th className="th">Location</th>
-                  <th className="th text-right">Purchases</th>
+                  <th className="th col-opt">Location</th>
+                  <th className="th col-opt text-right">Purchases</th>
                   <th className="th text-right">Lifetime value</th>
                 </tr>
               </thead>
@@ -97,9 +97,12 @@ export default function CustomersPage() {
                   <tr key={c.id} className="hover:bg-slate-800/30 cursor-pointer" onClick={() => open(c.id)}>
                     <td className="td font-medium text-white">{c.full_name}</td>
                     <td className="td text-slate-400 font-mono text-xs">{c.phone || '—'}</td>
-                    <td className="td text-slate-400">{c.address || '—'}</td>
-                    <td className="td text-right">{c.purchase_count ?? 0}</td>
-                    <td className="td text-right font-semibold text-white">{ugx(c.lifetime_value)}</td>
+                    <td className="td col-opt text-slate-400">{c.address || '—'}</td>
+                    <td className="td col-opt text-right">{c.purchase_count ?? 0}</td>
+                    <td className="td text-right font-semibold text-white tabular-nums whitespace-nowrap">
+                      <span className="sm:hidden">{compactUgx(c.lifetime_value)}</span>
+                      <span className="hidden sm:inline">{ugx(c.lifetime_value)}</span>
+                    </td>
                   </tr>
                 ))}
               </tbody>

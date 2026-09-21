@@ -12,7 +12,7 @@ router.get('/catalog', async (req, res) => {
   res.json({ products, can_receive: ['admin', 'manager'].includes(req.user.role) || (req.user.permissions || []).includes('inventory_entry') });
 });
 
-// Server-computed default title for a new reorder list: RL-19-Sep-26-01.
+// Server-computed default title for a new reorder list: Reorder - 20 Sep - 01.
 router.get('/reorders/next-ref', async (req, res) => {
   res.json({ title: await nextReorderRef() });
 });
@@ -57,7 +57,8 @@ for (const [path, table] of [['consignments', 'consignments'], ['reorders', 'reo
   router.post(`/${path}`, guard, async (req, res, next) => {
     try {
       const body = req.body || {};
-      // Safety net: an empty reorder title gets the server-generated RL-DD-Mon-YY-NN.
+      // Safety net: an empty reorder title gets the server-generated default
+      // (e.g. Reorder - 20 Sep - 01).
       if (table === 'reorder_lists' && !String(body.title || '').trim()) {
         body.title = await nextReorderRef();
       }
@@ -70,14 +71,36 @@ for (const [path, table] of [['consignments', 'consignments'], ['reorders', 'reo
   });
 }
 
-// Update reorder list status (pending | processed | cancelled). Fulfilled is set server-side by the receive flow.
-router.patch('/reorders/:id/status', requirePermission('inventory_entry'), async (req, res) => {
+// Update reorder list status (pending | processed | fulfilled | cancelled).
+// 'fulfilled' is normally set server-side by the POS receive flow, but admins
+// can also fulfil a list directly from the dashboard.
+router.patch('/reorders/:id/status', requirePermission('inventory_entry'), async (req, res, next) => {
   const { id } = req.params;
   const { status } = req.body;
-  const valid = ['pending', 'processed', 'cancelled'];
+  const valid = ['pending', 'processed', 'fulfilled', 'cancelled'];
   if (!valid.includes(status)) return res.status(400).json({ error: 'Invalid status' });
-  await many(`UPDATE reorder_lists SET status = $1, updated_at = now() WHERE id = $2`, [status, id]);
-  res.json({ ok: true });
+  try {
+    if (status === 'fulfilled') {
+      // Mirror the receive flow: stamp fulfilled/fulfilled_at and write the audit entry.
+      await many(
+        `UPDATE reorder_lists
+         SET status = 'fulfilled', fulfilled = TRUE, fulfilled_at = COALESCE(fulfilled_at, now()), updated_at = now()
+         WHERE id = $1`,
+        [id],
+      );
+      await many('INSERT INTO audit_log (user_id, action, entity, entity_id) VALUES ($1, $2, $3, $4)', [
+        req.user.id,
+        'fulfill_reorder',
+        'reorder_lists',
+        id,
+      ]);
+    } else {
+      await many('UPDATE reorder_lists SET status = $1, updated_at = now() WHERE id = $2', [status, id]);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
 });
 
 module.exports = router;

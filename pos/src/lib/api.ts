@@ -167,8 +167,8 @@ export interface PurchasingRecord {
   items: PurchasingItem[]
   notes: string | null
   created_by_name?: string
-  source_reorder_id?: string | null
-  source_reorder_title?: string | null
+  source_list_id?: string | null
+  source_list_title?: string | null
   fulfilled?: boolean
   fulfilled_at?: string | null
   status?: 'pending' | 'processed' | 'fulfilled' | 'cancelled'
@@ -207,7 +207,7 @@ export const api = {
   // (already received) and cancelled lists are excluded from it.
   reorderCounts: () => request<ReorderCounts>('/api/purchasing/reorders/counts'),
 
-  // Server-generated default title for a new reorder list: RL-19-Sep-26-01.
+  // Server-generated default title for a new reorder list: Reorder - 20 Sep - 01.
   nextReorderRef: () => request<{ title: string }>('/api/purchasing/reorders/next-ref'),
 
   // Reorder-list lifecycle: pending -> processed (list prepared) -> fulfilled (stock received).
@@ -225,7 +225,7 @@ export const api = {
     notes: string
     client_txn_id: string
     items: PurchasingItem[]
-    source_reorder_id?: string | null
+    source_list_id?: string | null
   }) =>
     request<{ record: PurchasingRecord; duplicate: boolean }>('/api/purchasing/consignments', {
       method: 'POST',

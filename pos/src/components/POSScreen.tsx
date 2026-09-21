@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/database'
 import { createSale, getTodaySales } from '../db/repos'
@@ -46,7 +46,7 @@ export default function POSScreen() {
   const [receipt, setReceipt] = useState<LocalSale | null>(null)
   const [showHistory, setShowHistory] = useState(false)
   const [stockMode, setStockMode] = useState<'receive-select' | 'reorder' | 'receive' | null>(null)
-  const [sourceReorder, setSourceReorder] = useState<PurchasingRecord | null>(null)
+  const [sourceList, setSourceList] = useState<PurchasingRecord | null>(null)
   const [showReservations, setShowReservations] = useState(false)
   const [reserveBike, setReserveBike] = useState<Bike | null>(null)
   const [showAccount, setShowAccount] = useState(false)
@@ -457,20 +457,20 @@ export default function POSScreen() {
       {stockMode === 'receive-select' && canReceive && (
         <ReceiveSelectModal
           onClose={() => setStockMode(null)}
-          onSelect={(r) => { setSourceReorder(r); setStockMode('receive') }}
-          onNew={() => { setSourceReorder(null); setStockMode('receive') }}
+          onSelect={(r) => { setSourceList(r); setStockMode('receive') }}
+          onNew={() => { setSourceList(null); setStockMode('receive') }}
         />
       )}
 
       {stockMode === 'receive' && canReceive && (
         <ReceivingScreen
-          key={'receive-' + (sourceReorder?.id || 'new')}
+          key={'receive-' + (sourceList?.id || 'new')}
           mode="receive"
           canReceive={canReceive}
-          sourceReorder={sourceReorder || undefined}
-          onClose={() => { setStockMode(null); setSourceReorder(null) }}
+          sourceList={sourceList || undefined}
+          onClose={() => { setStockMode(null); setSourceList(null) }}
           onDone={(message) => {
-            setStockMode(null); setSourceReorder(null); setFlash(message)
+            setStockMode(null); setSourceList(null); setFlash(message)
             void runSyncCycle('after-receive')
             // Refresh the reorder-list badge count — only pending + processed count.
             api.reorderCounts()

@@ -49,9 +49,18 @@ body {
     @apply btn bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25;
   }
   .th {
-    @apply text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 px-4 py-3;
+    @apply text-left text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-slate-500 px-3 py-2.5 sm:px-4 sm:py-3;
   }
   .td {
-    @apply px-4 py-3 text-sm border-t border-slate-800/60 tabular-nums;
+    @apply px-3 py-2.5 sm:px-4 sm:py-3 text-[13px] sm:text-sm border-t border-slate-800/60 tabular-nums;
+  }
+  /* Optional table column: hidden on phones, restored from small tablets up. */
+  .col-opt {
+    display: none;
+  }
+  @media (min-width: 640px) {
+    .col-opt {
+      display: table-cell;
+    }
   }
 }

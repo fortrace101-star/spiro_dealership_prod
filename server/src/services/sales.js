@@ -133,12 +133,23 @@ async function recordSale(input, actor) {
     }
 
     // ---- Credit sale creates a manager approval request ----
+    // Approval requests are pushed to admins after commit (see setImmediate below).
+    const approvalPushes = [];
     if (input.payment_method === 'credit') {
       await client.query(
         `INSERT INTO approvals (type, requested_by, payload, status)
          VALUES ('credit_sale', $1, $2, 'pending')`,
         [actor.id, JSON.stringify({ sale_id: sale.id, receipt_no: receiptNo, total, customer_id: customerId })]
       );
+      approvalPushes.push({
+        title: '🧾 Credit sale approval',
+        body: `Receipt ${receiptNo} — UGX ${Number(total || 0).toLocaleString('en-UG', { maximumFractionDigits: 0 })} on credit needs manager approval`,
+        url: '/approvals',
+        tag: 'approval:' + sale.id + ':credit',
+        saleId: sale.id,
+        receiptNo,
+        total,
+      });
     }
 
     // ---- Discount beyond 5% also requires approval (Phase 1 control) ----
@@ -148,6 +159,16 @@ async function recordSale(input, actor) {
          VALUES ('discount', $1, $2, 'pending')`,
         [actor.id, JSON.stringify({ sale_id: sale.id, receipt_no: receiptNo, subtotal, discount, pct: +(discount / subtotal * 100).toFixed(1) })]
       );
+      approvalPushes.push({
+        title: '💰 Discount approval',
+        body: `Receipt ${receiptNo} — ${+(discount / subtotal * 100).toFixed(1)}% discount (UGX ${Number(discount || 0).toLocaleString('en-UG', { maximumFractionDigits: 0 })}) needs manager approval`,
+        url: '/approvals',
+        tag: 'approval:' + sale.id + ':discount',
+        saleId: sale.id,
+        receiptNo,
+        subtotal,
+        discount,
+      });
     }
 
     await client.query('COMMIT');
@@ -160,6 +181,8 @@ async function recordSale(input, actor) {
     const pushSvc = require('./push');
     setImmediate(async () => {
       pushSvc.notifyAdmins(pushSvc.saleNotification({ ...sale, cashier_name: cashierName })).catch(() => {})
+      // Pending approval requests created by this sale (credit / big discount)
+      for (const p of approvalPushes) pushSvc.notifyAdmins(p).catch(() => {})
       // Low-stock / stock-out warnings after stock deduction
       try {
         for (const it of input.items || []) {
@@ -184,7 +207,8 @@ async function recordSale(input, actor) {
         if (Number(todayTotal.rows[0]?.t || 0) > Number(prev.rows[0]?.r || 0)) {
           const rec = await client.query(
             `INSERT INTO revenue_records (id, revenue, date) VALUES (1, $1, CURRENT_DATE)
-             ON CONFLICT (id) DO UPDATE SET revenue = $1, date = CURRENT_DATE`,
+             ON CONFLICT (id) DO UPDATE SET revenue = $1, date = CURRENT_DATE
+             RETURNING revenue`,
             [Number(todayTotal.rows[0]?.t || 0)]
           )
           pushSvc.notifyAdmins(pushSvc.revenueRecord(rec.rows[0]?.revenue || 0, prev.rows[0]?.r || 0, new Date().toISOString().slice(0, 10))).catch(() => {})

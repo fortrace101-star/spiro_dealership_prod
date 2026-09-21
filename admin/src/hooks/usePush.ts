@@ -15,6 +15,9 @@ export type PushState = 'unsupported' | 'denied' | 'prompt' | 'subscribed' | 'un
 export function usePush() {
   const [state, setState] = useState<PushState>('unsubscribed')
   const [busy, setBusy] = useState(false)
+  // Human-readable failure reason shown under the Enable alerts button so a
+  // blocked/failed subscription is never a silent no-op.
+  const [error, setError] = useState('')
 
   const detect = useCallback(async () => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
@@ -38,7 +41,22 @@ export function usePush() {
 
   const enable = useCallback(async () => {
     setBusy(true)
+    setError('')
     try {
+      // Browsers block the permission prompt silently once the user (or a
+      // previous dismiss) has denied it — surface that instead of failing
+      // quietly inside pushManager.subscribe.
+      if ('Notification' in window && Notification.permission === 'denied') {
+        setError('Notifications are blocked for this site. Click the lock icon in the address bar, set Notifications to Allow, then click Enable alerts again.')
+        return false
+      }
+      if ('Notification' in window && Notification.permission === 'default') {
+        const perm = await Notification.requestPermission()
+        if (perm !== 'granted') {
+          setError('Notification permission was not granted — no alerts can be delivered.')
+          return false
+        }
+      }
       const { publicKey } = await api.vapidPublicKey()
       const reg = await navigator.serviceWorker.register('/sw.js')
       await navigator.serviceWorker.ready
@@ -57,6 +75,12 @@ export function usePush() {
       return true
     } catch (err) {
       console.error('[push] subscribe failed', err)
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(
+        msg.includes('NotAllowed')
+          ? 'Notifications are blocked for this site. Allow them via the lock icon in the address bar, then try again.'
+          : `Could not enable alerts: ${msg}`,
+      )
       return false
     } finally {
       setBusy(false)
@@ -72,5 +96,5 @@ export function usePush() {
     }
   }, [])
 
-  return { state, busy, enable, sendTest, refresh: detect }
+  return { state, busy, error, enable, sendTest, refresh: detect }
 }

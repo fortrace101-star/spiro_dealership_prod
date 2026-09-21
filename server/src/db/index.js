@@ -22,9 +22,12 @@ async function many(text, params = []) {
 }
 
 async function initSchema() {
-  const sql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+  // Strip any UTF-8 BOM so a byte-order mark at the start of schema.sql can
+  // never be sent to Postgres as a syntax error ("syntax error at or near ...").
+  const sql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8').replace(/^\uFEFF/, '');
   await pool.query(sql);
   console.log('[db] schema ready');
 }
+
 
 module.exports = { pool, query, one, many, initSchema };

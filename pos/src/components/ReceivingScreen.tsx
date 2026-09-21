@@ -9,13 +9,13 @@ type Props = {
   onClose: () => void
   onDone: (m: string) => void
   /** An existing reorder list this delivery is fulfilling (receive mode). */
-  sourceReorder?: PurchasingRecord
+  sourceList?: PurchasingRecord
 }
 type DraftLine = PurchasingItem & { key: string; selling_price?: number }
 const CATS = PRODUCT_CATEGORIES
 const num = (v: string) => { const n = Number(v); return Number.isFinite(n) ? n : NaN }
-const DRAFT0 = { sku: '', name: '', barcode: '', category: '' as ProductCategory, cost: '', qty: '', reorder: '' }
-export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sourceReorder }: Props) {
+const DRAFT0 = { sku: '', name: '', barcode: '', category: '' as ProductCategory, cost: '', qty: '', reorder: '', sell: '' }
+export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sourceList }: Props) {
   const rx = mode === 'receive'
   const [prods, setProds] = useState<PurchasingProduct[] | null>(null)
   // Authoritative capability flag: the catalog response is read from the database on
@@ -27,11 +27,17 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
   // When fulfilling an existing reorder list, its lines are pre-filled so the
   // cashier only needs to enter receipt reference/supplier/costs and Receive.
   const [lines, setLines] = useState<DraftLine[]>(() =>
-    rx && sourceReorder
-      ? sourceReorder.items.map((i) => ({ ...i, key: 's:' + (i.product_id || i.name) }))
+    rx && sourceList
+      ? sourceList.items.map((i) => ({ ...i, key: 's:' + (i.product_id || i.name) }))
       : [],
   )
-  const [ref, setRef] = useState('')
+  // Delivery reference defaults to the reorder list title plus " - STK"
+  // (e.g. "Reorder - 20 Sep - 01 - STK") so the delivery is traceable to the
+  // list it fulfils; still editable and required in receive mode.
+  const [ref, setRef] = useState(() => {
+    const t = sourceList?.title || sourceList?.reference || ''
+    return t ? t + ' - STK' : ''
+  })
   const [title, setTitle] = useState('')
   const [supplier, setSupplier] = useState('')
   const [delivery, setDelivery] = useState('')
@@ -53,7 +59,7 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
         if (!dead) setHist(h.records)
       } catch (e) { if (!dead) setErr(e instanceof Error ? e.message : 'History failed') }
       // Default the reorder list title to the server-generated date reference
-      // (e.g. RL-19-Sep-26-01). Keeps anything the cashier already typed.
+      // (e.g. Reorder - 20 Sep - 01). Keeps anything the cashier already typed.
       if (!rx) {
         try {
           const nr = await api.nextReorderRef()
@@ -64,6 +70,17 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
     })()
     return () => { dead = true }
   }, [rx])
+
+  /** Move a saved reorder list from pending to processed (from the Saved lists section). */
+  async function markList(rec: PurchasingRecord, status: 'pending' | 'processed') {
+    setErr('')
+    try {
+      await api.updateReorderStatus(rec.id, status)
+      setHist((v) => v.map((x) => (x.id === rec.id ? { ...x, status } : x)))
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not update status')
+    }
+  }
   const avail = useMemo(() => {
     const s = q.trim().toLowerCase()
     return (prods || [])
@@ -100,11 +117,14 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
     setErr('')
     const sku = draft.sku.trim().toUpperCase()
     const lvl = Math.round(num(draft.reorder) || 10)
-    // The unit cost captured here is the purchase price (stays on unit_cost);
-    // the selling price is finalised on the draft line once the item is added.
+    // The unit cost is the purchase price; the selling price is what the item
+    // will retail for — required when receiving, so the new catalog row is not
+    // created with a zero price.
+    const sell = num(draft.sell)
+    if (rx && !(sell > 0)) { setErr('Enter a selling price for the new product.'); return }
     setLines((v) => [...v, {
       key: 'n:' + Date.now(), product_id: null, sku, name: draft.name.trim(), qty, unit_cost: cost, reorder_level: lvl,
-      new_product: { sku, name: draft.name.trim(), barcode: draft.barcode.trim(), category: draft.category, selling_price: rx ? cost : 0, min_stock: 5, reorder_level: lvl },
+      new_product: { sku, name: draft.name.trim(), barcode: draft.barcode.trim(), category: draft.category, selling_price: rx ? sell : 0, min_stock: 5, reorder_level: lvl },
     }])
     setDraft(DRAFT0)
     setShowNew(false)
@@ -129,7 +149,7 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
         return rest
             })
       if (rx) {
-        const r = await api.createConsignment({ reference: ref.trim(), supplier: supplier.trim(), delivery_cost: del, notes: notes.trim(), client_txn_id: uuid(), items, source_reorder_id: sourceReorder?.id || null })
+        const r = await api.createConsignment({ reference: ref.trim(), supplier: supplier.trim(), delivery_cost: del, notes: notes.trim(), client_txn_id: uuid(), items, source_list_id: sourceList?.id || null })
         onDone(r.duplicate ? 'Delivery already recorded.' : 'Consignment ' + r.record.reference + ' received.')
       } else {
         const r = await api.createReorder({ title: title.trim(), notes: notes.trim(), client_txn_id: uuid(), items })
@@ -143,19 +163,19 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
       <div className="relative card w-full max-w-3xl p-5 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
           <div>
-            <h3 className="font-bold text-white text-lg">{rx ? 'Receive consignment' : 'Prepare reorder list'}</h3>
+            <h3 className="font-bold text-white text-lg">{rx ? 'Receive consignment' : 'New Reorder List'}</h3>
             <p className="text-xs text-slate-500">{rx ? 'Stock updates immediately. New products can be created inline.' : 'Draft what to order next — never changes stock. New products can be included.'}</p>
           </div>
           <button className="btn-ghost text-xs" onClick={onClose}>Close</button>
         </div>
                 {!rx && <button type="button" className="btn-ghost text-xs mb-3" onClick={addLow}>+ Suggest low-stock items</button>}
-        {rx && sourceReorder && (
+        {rx && sourceList && (
           <p className="text-xs text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-3 py-2 mb-3">
-            Fulfilling reorder list: <span className="font-medium">{sourceReorder.title || sourceReorder.reference || 'untitled'}</span>
-            {sourceReorder.items.length} items &middot; this list will be marked fulfilled on the server once received and removed from active lists.
+            Fulfilling reorder list: <span className="font-medium">{sourceList.title || sourceList.reference || 'untitled'}</span>
+            {sourceList.items.length} items &middot; this list will be marked fulfilled on the server once received and removed from active lists.
           </p>
         )}
-        {rx && !can && <p className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 mb-3">No receive permission yet — an admin can grant “Inventory entryâ€ in Team &amp; Codes.</p>}
+        {rx && !can && <p className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 mb-3">No receive permission yet — an admin can grant “Inventory entry” in Team &amp; Codes.</p>}
         <div className="grid md:grid-cols-2 gap-3 mb-3">
           {rx ? (
             <>
@@ -204,6 +224,9 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
                   <input className="input" type="number" min={0} value={draft.cost} onChange={(e) => setDraft({ ...draft, cost: e.target.value })} placeholder="Unit cost (UGX)" />
                   <input className="input" type="number" min={1} value={draft.qty} onChange={(e) => setDraft({ ...draft, qty: e.target.value })} placeholder="Quantity" />
                 </div>
+                {rx && (
+                  <input className="input border-brand-500/40" type="number" min={1} value={draft.sell} onChange={(e) => setDraft({ ...draft, sell: e.target.value })} placeholder="Selling price (UGX) *" />
+                )}
                 <button type="button" className="btn-primary text-xs w-full" onClick={addNew}>{rx ? 'Add to delivery' : 'Add to list'}</button>
               </div>
             )}
@@ -222,6 +245,12 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
                     <label className="block"><span className="text-[11px] text-slate-500">Qty</span><input className="input" type="number" min={1} value={String(l.qty)} onChange={(e) => setLines((v) => v.map((x) => x.key === l.key ? { ...x, qty: Math.max(0, Math.floor(Number(e.target.value) || 0)) } : x))} /></label>
                      <label className="block"><span className="text-[11px] text-slate-500">Unit cost</span><input className="input" type="number" min={0} value={String(l.unit_cost)} onChange={(e) => setLines((v) => v.map((x) => x.key === l.key ? { ...x, unit_cost: Number(e.target.value) || 0 } : x))} /></label>
                   </div>
+                  {rx && l.new_product && (
+                    <label className="block mt-2">
+                      <span className="text-[11px] text-brand-300">Selling price (UGX) *</span>
+                      <input className="input" type="number" min={1} value={l.new_product.selling_price ? String(l.new_product.selling_price) : ''} onChange={(e) => setLines((v) => v.map((x) => x.key === l.key && x.new_product ? { ...x, new_product: { ...x.new_product, selling_price: Number(e.target.value) || 0 } } : x))} />
+                    </label>
+                  )}
                 </div>
               ))}
             </div>
@@ -246,14 +275,28 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
                       className="w-full flex items-center justify-between gap-2 text-left"
                       onClick={() => setOpenHist(open ? null : r.id)}
                     >
-                      <span className="text-white">{rx ? r.reference : r.title} - {r.items.length} items</span>
+                      <span className="text-white">
+                        {rx ? r.reference : r.title} - {r.items.length} items
+                        {!rx && (r.status === 'processed' ? ' · processed' : ' · pending')}
+                      </span>
                       <span className={cn('text-slate-600 transition-transform', open && 'rotate-90')}>›</span>
                     </button>
                     {!open && (
                       <div className="mt-0.5 truncate">{r.items.map((i) => i.name + ' x' + i.qty).join(', ')}</div>
                     )}
-                      {rx && (r.source_reorder_title || r.source_reorder_id) && (
-                        <div className="mt-0.5 text-sky-300">Fulfills: {r.source_reorder_title || 'Reorder list'}</div>
+                    {!rx && (r.status === 'pending' || !r.status) && (
+                      <div className="mt-1.5">
+                        <button
+                          type="button"
+                          className="text-[11px] px-2.5 py-1 rounded-md bg-emerald-600 text-white font-semibold hover:bg-emerald-500 active:bg-emerald-700 transition shadow-sm"
+                          onClick={() => void markList(r, 'processed')}
+                        >
+                          Mark processed
+                        </button>
+                      </div>
+                    )}
+                      {rx && (r.source_list_title || r.source_list_id) && (
+                        <div className="mt-0.5 text-sky-300">Fulfills {r.source_list_title || 'Reorder list'}</div>
                       )}
                     {open && (
                       <div className="mt-2 border-t border-slate-800/70 pt-2 space-y-1">
@@ -262,8 +305,8 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
                             <span className="min-w-0 truncate">
                               <span className="font-mono text-slate-500">{i.sku}</span> {i.name}
                               {i.new_product && <span className="ml-1 text-[10px] text-sky-400">new</span>}
-                        {rx && (r.source_reorder_title || r.source_reorder_id) && (
-                          <div className="text-sky-300">Fulfills: {r.source_reorder_title || 'Reorder list'}</div>
+                        {rx && (r.source_list_title || r.source_list_id) && (
+                          <div className="text-sky-300">Fulfills {r.source_list_title || 'Reorder list'}</div>
                         )}
                             </span>
                             <span className="text-slate-300 shrink-0">×{i.qty}{rx && i.unit_cost ? ` · ${ugx(Number(i.unit_cost) || 0)}` : ''}</span>

@@ -216,7 +216,7 @@ export default function InventoryPage() {
           <div className="absolute inset-0 bg-black/60" />
           <div className="relative w-full max-w-md h-full bg-[#12161d] border-l border-slate-800 p-4 sm:p-6 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-white">Stock movements</h3>
+              <h3 className="text-sm sm:text-base font-semibold text-white">Stock movements</h3>
               <button className="btn-ghost text-xs" onClick={() => setMovements(null)}>Close</button>
             </div>
             {movements.length === 0 ? (
@@ -302,9 +302,9 @@ export function Modal({ title, children, onClose }: { title: string; children: R
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/60" />
-      <div className="relative card w-full sm:max-w-lg rounded-b-none sm:rounded-2xl p-4 sm:p-6 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <div className="relative card w-full max-w-[98vw] sm:max-w-3xl rounded-b-none sm:rounded-2xl p-4 sm:p-6 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-white">{title}</h3>
+          <h3 className="text-base sm:text-lg font-semibold text-white">{title}</h3>
           <button className="text-slate-500 hover:text-white text-xl leading-none" onClick={onClose}>×</button>
         </div>
         {children}

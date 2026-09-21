@@ -77,19 +77,9 @@ export default function ReceiveSelectModal({ onClose, onSelect, onNew }: Props) 
     })()
   }, [])
 
-  const lists = (reorders || []).filter((r) => r.status !== 'cancelled')
-
-  /** Move a saved list between pending / processed / cancelled (fulfilled is server-side only). */
-  async function mark(rec: PurchasingRecord, status: 'pending' | 'processed' | 'cancelled') {
-    setError('')
-    try {
-      await api.updateReorderStatus(rec.id, status)
-      setReorders((v) => (v || []).map((x) => (x.id === rec.id ? { ...x, status } : x)))
-      setSelected((s) => (s && s.id === rec.id ? { ...s, status } : s))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not update status')
-    }
-  }
+  // Only lists that can still be fulfilled: pending or processed.
+  // Fulfilled lists are hidden here — their stock has already been received.
+  const lists = (reorders || []).filter((r) => r.status === 'pending' || r.status === 'processed' || !r.status)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -129,29 +119,13 @@ export default function ReceiveSelectModal({ onClose, onSelect, onNew }: Props) 
                   </div>
                   {r.supplier && <div className="text-xs text-slate-500 mt-0.5">Supplier: {r.supplier}</div>}
                   {r.items_total != null && <div className="text-xs text-slate-500 mt-0.5">Est. value: {ugx(r.items_total)}</div>}
-
-                  <div className="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-slate-800">
-                    <span className="text-[11px] text-slate-600">Set status:</span>
-                    {r.status === 'processed' ? (
-                      <button
-                        className="text-[11px] px-2 py-0.5 rounded-md border border-slate-700 text-slate-300 hover:border-brand-500/60 hover:text-brand-300"
-                        onClick={(e) => { e.stopPropagation(); void mark(r, 'pending') }}
-                      >
-                        Back to pending
-                      </button>
-                    ) : (
-                      <button
-                        className="text-[11px] px-2 py-0.5 rounded-md border border-slate-700 text-slate-300 hover:border-brand-500/60 hover:text-brand-300"
-                        onClick={(e) => { e.stopPropagation(); void mark(r, 'processed') }}
-                      >
-                        Mark processed
-                      </button>
-                    )}
+                  <div className="flex justify-end mt-2">
                     <button
-                      className="text-[11px] px-2 py-0.5 rounded-md border border-slate-700 text-slate-400 hover:border-red-500/50 hover:text-red-300"
-                      onClick={(e) => { e.stopPropagation(); void mark(r, 'cancelled') }}
+                      className="btn-ghost text-xs"
+                      onClick={(e) => { e.stopPropagation(); printList(r) }}
+                      title="Print or save this list as PDF"
                     >
-                      Cancel
+                      Print
                     </button>
                   </div>
                 </div>
@@ -210,32 +184,7 @@ export default function ReceiveSelectModal({ onClose, onSelect, onNew }: Props) 
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-2 mt-4 pt-3 border-t border-slate-800">
-              <div className="flex flex-wrap items-center gap-2">
-                <StatusBadge status={selected.status} />
-                {selected.status === 'processed' ? (
-                  <button
-                    className="text-[11px] px-2 py-1 rounded-md border border-slate-700 text-slate-300 hover:border-brand-500/60 hover:text-brand-300"
-                    onClick={() => void mark(selected, 'pending')}
-                  >
-                    Back to pending
-                  </button>
-                ) : (
-                  <button
-                    className="text-[11px] px-2 py-1 rounded-md border border-slate-700 text-slate-300 hover:border-brand-500/60 hover:text-brand-300"
-                    onClick={() => void mark(selected, 'processed')}
-                  >
-                    Mark processed
-                  </button>
-                )}
-                {selected.status !== 'cancelled' && (
-                  <button
-                    className="text-[11px] px-2 py-1 rounded-md border border-slate-700 text-slate-400 hover:border-red-500/50 hover:text-red-300"
-                    onClick={() => void mark(selected, 'cancelled')}
-                  >
-                    Cancel
-                  </button>
-                )}
-              </div>
+              <StatusBadge status={selected.status} />
               <div className="flex justify-end gap-2">
                 <button
                   className="btn-ghost"
@@ -245,7 +194,7 @@ export default function ReceiveSelectModal({ onClose, onSelect, onNew }: Props) 
                   Print
                 </button>
                 <button className="btn-ghost" onClick={() => setSelected(null)}>Back</button>
-                <button className="btn-primary" onClick={() => onSelect(selected)}>Fulfill this list</button>
+                <button className="btn-primary" onClick={() => onSelect(selected)}>Receive Stock</button>
               </div>
             </div>
           </div>

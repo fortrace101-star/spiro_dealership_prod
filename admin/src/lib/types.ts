@@ -260,12 +260,21 @@ export interface RangeReport {
 }
 
 export interface PurchasingListItem {
-  product_id: string
+  product_id: string | null
   sku: string
   name: string
   qty: number
-  unit_cost: number
-  reorder_level: number
+  unit_cost?: number
+  reorder_level?: number
+  new_product?: {
+    sku: string
+    name: string
+    barcode: string
+    category: string
+    selling_price: number
+    min_stock: number
+    reorder_level: number
+  }
 }
 
 export interface PurchasingRecord {
@@ -279,8 +288,8 @@ export interface PurchasingRecord {
   items: PurchasingListItem[]
   notes: string | null
   created_by_name?: string
-  source_reorder_id?: string | null
-  source_reorder_title?: string | null
+  source_list_id?: string | null
+  source_list_title?: string | null
   created_at: string
   status?: string
 }

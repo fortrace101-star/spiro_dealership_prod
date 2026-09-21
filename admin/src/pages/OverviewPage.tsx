@@ -121,8 +121,8 @@ export default function OverviewPage() {
         subtitle={new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
       />
 
-      {/* KPI row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* KPI row — 2×2 at every breakpoint */}
+      <div className="grid grid-cols-2 gap-4">
         <KpiCard
           label="Revenue"
           value={ugx(t.revenue)}
@@ -217,8 +217,8 @@ export default function OverviewPage() {
         </div>
       </div>
 
-      {/* Alerts strip */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
+      {/* Alerts strip — 2×2 at every breakpoint */}
+      <div className="grid grid-cols-2 gap-4 mt-4">
         <AlertCard label="Low stock alerts" value={t.low_stock_count} tone="amber" onClick={openLowStock} />
         <AlertCard label="Pending approvals" value={t.pending_approvals} tone="sky" onClick={openApprovals} />
         <AlertCard label="Awaiting sync (POS)" value={t.pending_sync} tone="violet" onClick={openSync} />
@@ -433,7 +433,7 @@ function AlertCard({
       disabled={!onClick}
       aria-label={onClick ? `${label} — view details` : undefined}
       className={cn(
-        'rounded-2xl border p-4 text-left transition',
+        'rounded-2xl border p-3 sm:p-4 text-left transition',
         tones[tone],
         onClick && 'cursor-pointer hover:brightness-125 focus:outline-none focus:ring-1 focus:ring-white/30',
       )}
@@ -442,7 +442,7 @@ function AlertCard({
         {label}
         {onClick && <span aria-hidden>→</span>}
       </div>
-      <div className="mt-1 text-xl font-bold">{isText ? value : num(value as number)}</div>
+      <div className="mt-1 text-lg font-bold tabular-nums sm:text-xl">{isText ? value : num(value as number)}</div>
     </button>
   )
 }

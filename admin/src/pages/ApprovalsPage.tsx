@@ -129,11 +129,11 @@ export default function ApprovalsPage() {
           <button
             key={key}
             onClick={() => setCategory(key)}
-            className={(category === key ? 'btn-primary' : 'btn-ghost') + ' text-xs'}
+            className={(category === key ? 'btn-primary' : 'btn-ghost') + ' text-xs relative'}
           >
             {CATEGORY_LABEL[key]}
             {badge > 0 && (
-              <span className="ml-2 inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full bg-amber-500 text-[10px] font-bold text-slate-900">
+              <span className="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 flex items-center justify-center text-[9px] font-bold text-white rounded-full ring-1 ring-slate-900 bg-amber-500 ring-amber-900">
                 {badge > 99 ? '99+' : badge}
               </span>
             )}

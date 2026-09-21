@@ -304,7 +304,7 @@ CREATE TABLE IF NOT EXISTS consignments (
   items_total NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (items_total >= 0),
   items JSONB NOT NULL DEFAULT '[]'::jsonb,
   notes TEXT,
-  source_reorder_id UUID REFERENCES reorder_lists(id),  -- links the received stock to the list it fulfilled
+  source_list_id UUID REFERENCES reorder_lists(id),  -- links the received stock to the list it fulfilled
   created_by UUID NOT NULL REFERENCES users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -312,10 +312,10 @@ CREATE TABLE IF NOT EXISTS consignments (
 CREATE INDEX IF NOT EXISTS idx_consignment_created ON consignments (created_at);
 -- Same upgrade-in-place guard as reorder_lists above: older consignments tables
 -- may predate the fulfillment link, so the column is (re-)declared idempotently.
-ALTER TABLE consignments ADD COLUMN IF NOT EXISTS source_reorder_id UUID REFERENCES reorder_lists(id);
+ALTER TABLE consignments ADD COLUMN IF NOT EXISTS source_list_id UUID REFERENCES reorder_lists(id);
 -- Older installs also predate the updated_at maintenance column.
 ALTER TABLE consignments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
-CREATE INDEX IF NOT EXISTS idx_consignment_source ON consignments (source_reorder_id);
+CREATE INDEX IF NOT EXISTS idx_consignment_source ON consignments (source_list_id);
 
 -- Existing DBs created before the category restructure keep working: legacy
 -- values are migrated to the canonical names, then the CHECK is re-widened.

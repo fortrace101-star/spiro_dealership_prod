@@ -5,7 +5,7 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   return (
     <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between mb-6 gap-4">
       <div>
-        <h1 className="text-xl sm:text-2xl font-bold text-white">{title}</h1>
+        <h1 className="text-lg sm:text-2xl font-bold text-white">{title}</h1>
         {subtitle && <p className="text-sm text-slate-500 mt-0.5">{subtitle}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
@@ -34,15 +34,15 @@ export function KpiCard({
       disabled={!interactive}
       aria-label={interactive ? `${label} — view details` : undefined}
       className={cn(
-        'card p-5 text-left transition',
+        'card p-4 sm:p-5 text-left transition',
         accent && 'bg-gradient-to-br from-brand-500/15 to-transparent border-brand-500/30',
         interactive && 'cursor-pointer hover:border-brand-500/50 hover:bg-[#161b24] focus:outline-none focus:ring-1 focus:ring-brand-500/50',
       )}
     >
       <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">{label}</div>
-      <div className={cn('mt-2 text-2xl font-bold text-white', accent && 'text-brand-300')}>{value}</div>
-      {delta && <div className="mt-1 text-xs text-slate-500">{delta}</div>}
-      {interactive && <div className="mt-2 text-[11px] text-brand-300/80">Click for details →</div>}
+      <div className={cn('mt-2 text-lg font-bold text-white tabular-nums', accent && 'text-brand-300 sm:text-2xl')}>{value}</div>
+      {delta && <div className="mt-1 text-[11px] sm:text-xs text-slate-500">{delta}</div>}
+      {interactive && <div className="mt-2 hidden text-[11px] text-brand-300/80 sm:block">Click for details →</div>}
     </button>
   )
 }

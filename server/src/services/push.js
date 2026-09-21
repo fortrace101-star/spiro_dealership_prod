@@ -60,4 +60,51 @@ function saleNotification(sale) {
   };
 }
 
-module.exports = { notifyAdmins, saleNotification, stockWarning, revenueRecord, ensureConfigured };
+/** Payload when a product's stock has fallen to/below its reorder level after a sale.
+ *  Returns null while stock is still healthy, so the caller can simply skip sending. */
+function stockWarning(product, qty, context) {
+  const stock = Number(qty || 0);
+  const level = Number(product.reorder_level || 0);
+  if (stock > level) return null;
+  return {
+    title: stock <= 0 ? '🚨 Stock out' : '⚠️ Low stock',
+    body: `${product.name} (${product.sku}) — ${stock} left (reorder level ${level}) — ${context}`,
+    url: '/inventory',
+    tag: 'low-stock:' + product.id,
+    productId: product.id,
+    stockQty: stock,
+    reorderLevel: level,
+    context,
+  };
+}
+
+/** Payload when today's revenue sets a new all-time high. */
+function revenueRecord(newRevenue, prevRevenue, date) {
+  const fmt = (n) => Number(n || 0).toLocaleString('en-UG', { maximumFractionDigits: 0 });
+  return {
+    title: '📈 Revenue record',
+    body: `New all-time high: UGX ${fmt(newRevenue)} on ${date} (previous UGX ${fmt(prevRevenue)})`,
+    url: '/reports',
+    tag: 'revenue-record:' + date,
+    revenue: Number(newRevenue || 0),
+    previous: Number(prevRevenue || 0),
+    date,
+  };
+}
+
+/** Payload when a consignment fulfills a reorder list (stock received / restocked). */
+function restockNotification(record) {
+  const itemCount = (record.items || []).length;
+  const label = record.reference || record.title || 'Restock';
+  return {
+    title: '📦 Stock received',
+    body: `${label} — ${itemCount} line${itemCount === 1 ? '' : 's'} received${record.supplier ? ' from ' + record.supplier : ''}`,
+    url: '/purchasing',
+    tag: 'restock:' + record.id,
+    recordId: record.id,
+    itemCount,
+    supplier: record.supplier || null,
+  };
+}
+
+module.exports = { notifyAdmins, saleNotification, stockWarning, revenueRecord, restockNotification, ensureConfigured };
