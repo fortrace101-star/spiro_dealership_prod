@@ -28,6 +28,9 @@ self.addEventListener('push', (event) => {
         icon: '/logo.png',
         badge: '/logo.png',
         tag: data.tag || undefined,
+        // `silent: false` is the default, but set explicitly: OS notifications
+        // must beep/vibrate on arrival even with no dashboard tab open.
+        silent: false,
         data: { url: data.url || '/' },
         vibrate: [100, 50, 100],
       });

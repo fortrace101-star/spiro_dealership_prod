@@ -1,6 +1,35 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, getToken } from '../lib/api'
 
+/** Short two-tone chime (~0.4s) for push toasts. Exported so Layout can play
+ *  it when a push arrives; Web Audio needs no audio file and respects the
+ *  OS / browser mute state — it cannot force sound through a muted device. */
+export function playPushChime(): void {
+  try {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!Ctx) return
+    const ctx = new Ctx()
+    const play = (freq: number, at: number, dur = 0.18) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      gain.gain.setValueAtTime(0.0001, at)
+      gain.gain.exponentialRampToValueAtTime(0.25, at + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + dur)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(at)
+      osc.stop(at + dur + 0.05)
+    }
+    const t = ctx.currentTime + 0.02
+    play(880, t)          // A5
+    play(1174.66, t + 0.2) // D6
+    setTimeout(() => void ctx.close().catch(() => {}), 800)
+  } catch {
+    /* audio unsupported or blocked — toast still shows */
+  }
+}
+
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')

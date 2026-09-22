@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import { dateTime, num, ugx } from '../lib/format'
+import { compactUgx, dateTime, num, ugx } from '../lib/format'
 import type { Product, StockMovement } from '../lib/types'
-import { EmptyState, PageHeader, Spinner } from '../components/ui'
+import { EmptyState, PageHeader, Spinner, stockStatusMeta } from '../components/ui'
 import { cn } from '../lib/cn'
+import { usePageSize } from '../lib/usePageSize'
 
 const EMPTY_FORM = { sku: '', barcode: '', name: '', category: 'Spare Parts', brand: '', supplier: '', cost_price: '', selling_price: '', stock_qty: '', min_stock: '5', reorder_level: '10' }
 
@@ -17,6 +18,9 @@ export default function InventoryPage() {
   const [adjusting, setAdjusting] = useState<Product | null>(null)
   const [movements, setMovements] = useState<StockMovement[] | null>(null)
   const [error, setError] = useState('')
+  const [detail, setDetail] = useState<Product | null>(null)
+  const [page, setPage] = useState(1)
+  const pageSize = usePageSize()
 
   const load = useCallback(async () => {
     const r = await api.products(q, lowOnly)
@@ -24,8 +28,15 @@ export default function InventoryPage() {
   }, [q, lowOnly])
 
   useEffect(() => {
+    setPage(1) // reset page when a filter changes (pagination gotcha)
     load().catch(() => setProducts([]))
   }, [load])
+
+  const totalPages = Math.max(1, Math.ceil((products?.length || 0) / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const pageItems = (products || []).slice((safePage - 1) * pageSize, safePage * pageSize)
+  const rangeFrom = (products?.length || 0) === 0 ? 0 : (safePage - 1) * pageSize + 1
+  const rangeTo = Math.min(safePage * pageSize, products?.length || 0)
 
   function openNew() {
     setForm(EMPTY_FORM)
@@ -75,7 +86,7 @@ export default function InventoryPage() {
   return (
     <div>
       <PageHeader
-        title="Spare Parts Inventory"
+        title="Inventory"
         subtitle="Stock levels, reorder alerts and movement history"
         actions={<button className="btn-primary" onClick={openNew}>+ Add product</button>}
       />
@@ -100,31 +111,52 @@ export default function InventoryPage() {
               <thead>
                 <tr>
                   <th className="th">Product</th>
-                  <th className="th">Category</th>
-                  <th className="th text-right">Cost</th>
-                  <th className="th text-right">Price</th>
+                  <th className="th col-opt">Category</th>
+                  {/* Phones: one stacked Cost/Price cell; sm+: separate columns */}
+                  <th className="th text-right sm:hidden">
+                    <div className="text-slate-400">Cost</div>
+                    <div className="border-t border-slate-800/80 my-1" />
+                    <div className="text-slate-200">Price</div>
+                  </th>
+                  <th className="th col-opt text-right">Cost</th>
+                  <th className="th col-opt text-right">Price</th>
                   <th className="th text-right">Margin</th>
                   <th className="th text-right">Stock</th>
-                  <th className="th">Status</th>
-                  <th className="th"></th>
+                  <th className="th col-opt">Status</th>
+                  <th className="th col-opt"></th>
                 </tr>
               </thead>
               <tbody>
-                {products.map((p) => {
+                {pageItems.map((p) => {
                   const margin = Number(p.selling_price) > 0 ? ((Number(p.selling_price) - Number(p.cost_price)) / Number(p.selling_price)) * 100 : 0
                   const isLow = p.stock_qty <= p.reorder_level
+                  const stockColor = p.stock_qty === 0 ? 'text-red-400' : isLow ? 'text-orange-400' : 'text-emerald-400'
                   return (
-                    <tr key={p.id} className="hover:bg-slate-800/30">
+                    <tr key={p.id} className="hover:bg-slate-800/30 cursor-pointer" onClick={() => setDetail(p)}>
                       <td className="td">
                         <div className="font-medium text-white">{p.name}</div>
-                        <div className="text-xs text-slate-500 font-mono">{p.sku}{p.barcode ? ` · ${p.barcode}` : ''}</div>
+                        <div className="text-[11px] text-slate-500 font-mono">{p.sku}</div>
                       </td>
-                      <td className="td text-slate-400 text-xs">{p.category}</td>
-                      <td className="td text-right text-slate-400">{ugx(p.cost_price)}</td>
-                      <td className="td text-right">{ugx(p.selling_price)}</td>
-                      <td className="td text-right text-brand-300">{margin.toFixed(0)}%</td>
-                      <td className="td text-right font-semibold">{num(p.stock_qty)}</td>
-                      <td className="td">
+                      <td className="td col-opt text-slate-400 text-xs">{p.category}</td>
+                      <td className="td text-right tabular-nums whitespace-nowrap sm:hidden">
+                        <div className="text-slate-400">
+                          <span className="sm:hidden">{compactUgx(p.cost_price)}</span>
+                          <span className="hidden sm:inline">{ugx(p.cost_price)}</span>
+                        </div>
+                        <div className="border-t border-slate-800/80 my-1" />
+                        <div>
+                          <span className="sm:hidden">{compactUgx(p.selling_price)}</span>
+                          <span className="hidden sm:inline">{ugx(p.selling_price)}</span>
+                        </div>
+                      </td>
+                      <td className="td col-opt text-right text-slate-400 tabular-nums whitespace-nowrap">{ugx(p.cost_price)}</td>
+                      <td className="td col-opt text-right tabular-nums whitespace-nowrap">{ugx(p.selling_price)}</td>
+                      <td className="td text-right text-brand-300 tabular-nums">{margin.toFixed(0)}%</td>
+                      <td className={cn('td text-right font-semibold tabular-nums', stockColor)}>
+                        {num(p.stock_qty)}
+                        <span className="sm:hidden text-slate-600 text-xs ml-2">›</span>
+                      </td>
+                      <td className="td col-opt">
                         {p.stock_qty === 0 ? (
                           <span className="inline-flex items-center gap-1.5 font-semibold text-red-400">
                             <span className="h-2.5 w-2.5 rounded-full bg-red-400" />
@@ -142,7 +174,7 @@ export default function InventoryPage() {
                           </span>
                         )}
                       </td>
-                      <td className="td text-right whitespace-nowrap">
+                      <td className="td col-opt text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                         <button className="btn-ghost text-xs px-2 py-1" onClick={() => openEdit(p)}>Edit</button>
                         <button className="btn-ghost text-xs px-2 py-1 ml-1" onClick={() => showMovements(p)}>History</button>
                         <button className="btn-ghost text-xs px-2 py-1 ml-1" onClick={() => { setAdjusting(p); setMovements(null) }}>Adjust</button>
@@ -152,9 +184,88 @@ export default function InventoryPage() {
                 })}
               </tbody>
             </table>
+            {/* Mobile-only key: the Status column (which carries these colors) is sm+ only */}
+            <div className="sm:hidden px-4 py-3 border-t border-slate-800/60 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+              <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-400" />OK — in stock</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-orange-400" />Low — at/below reorder level</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-red-400" />Out — zero stock</span>
+            </div>
           </div>
         )}
       </div>
+
+      {/* Pagination */}
+      {products && products.length > 0 && (
+        <div className="flex items-center justify-between mt-3 text-sm">
+          <span className="text-slate-500">Showing {rangeFrom}–{rangeTo} of {products.length}</span>
+          <div className="flex items-center gap-2">
+            <button className="btn-ghost text-xs" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>← Prev</button>
+            <span className="text-slate-400 text-xs">Page {safePage} of {totalPages}</span>
+            <button className="btn-ghost text-xs" disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}>Next →</button>
+          </div>
+        </div>
+      )}
+
+      {/* Product detail drawer (Rule 2: home for the col-opt columns) */}
+      {detail && (
+        <div className="fixed inset-0 z-50 flex justify-end" onClick={() => setDetail(null)}>
+          <div className="absolute inset-0 bg-black/60" />
+          <div className="relative w-full max-w-lg h-full bg-[#12161d] border-l border-slate-800 p-4 sm:p-6 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between mb-6">
+              <div>
+                <div className="font-medium text-white text-lg">{detail.name}</div>
+                <div className="text-xs text-slate-500 font-mono">{detail.sku}{detail.barcode ? ` · ${detail.barcode}` : ''}</div>
+              </div>
+              <button className="btn-ghost text-xs" onClick={() => setDetail(null)}>Close</button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mb-6">
+              <div className="bg-[#0b0e13] border border-slate-800/60 rounded-xl p-3">
+                <div className="text-xs text-slate-500 mb-1">Selling price</div>
+                <div className="text-base font-semibold text-white">{ugx(detail.selling_price)}</div>
+              </div>
+              <div className={cn('bg-[#0b0e13] rounded-xl p-3 border', stockStatusMeta(detail.stock_qty, detail.reorder_level).card)}>
+                <div className="text-xs text-slate-500 mb-1">Stock on hand</div>
+                <div className="flex items-end justify-between gap-2">
+                  <div className="text-base font-semibold text-white">{num(detail.stock_qty)}</div>
+                  <span className={cn('text-[10px] font-semibold', stockStatusMeta(detail.stock_qty, detail.reorder_level).text)}>
+                    {stockStatusMeta(detail.stock_qty, detail.reorder_level).label}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm mb-6">
+              <Info label="Category" value={detail.category} />
+              <Info label="Brand" value={detail.brand || '—'} />
+              <Info label="Supplier" value={detail.supplier || '—'} />
+              <Info label="Cost price" value={ugx(detail.cost_price)} />
+              <Info label="Margin" value={Number(detail.selling_price) > 0 ? `${(((Number(detail.selling_price) - Number(detail.cost_price)) / Number(detail.selling_price)) * 100).toFixed(0)}%` : '—'} />
+              <Info label="Stock value" value={detail.stock_value != null ? ugx(detail.stock_value) : ugx(Number(detail.cost_price) * detail.stock_qty)} />
+              <Info label="Min stock" value={num(detail.min_stock)} />
+              <Info label="Reorder level" value={num(detail.reorder_level)} />
+              <Info label="Status" value={detail.stock_qty === 0 ? 'Out of stock' : detail.stock_qty <= detail.reorder_level ? 'Low stock' : 'In stock'} />
+              <Info label="Last updated" value={dateTime(detail.updated_at)} />
+            </div>
+
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button className="btn-ghost w-full sm:w-auto" onClick={() => showMovements(detail)}>Movement history</button>
+              <button
+                className="btn-ghost w-full sm:w-auto"
+                onClick={() => { const p = detail; setDetail(null); setAdjusting(p) }}
+              >
+                Adjust stock
+              </button>
+              <button
+                className="btn-primary w-full sm:w-auto"
+                onClick={() => { const p = detail; setDetail(null); openEdit(p) }}
+              >
+                Edit product
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add/Edit modal */}
       {showForm && (
@@ -304,7 +415,7 @@ export function Modal({ title, children, onClose }: { title: string; children: R
       <div className="absolute inset-0 bg-black/60" />
       <div className="relative card w-full max-w-[98vw] sm:max-w-3xl rounded-b-none sm:rounded-2xl p-4 sm:p-6 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base sm:text-lg font-semibold text-white">{title}</h3>
+          <h3 className="text-base sm:text-lg font-semibold text-white truncate">{title}</h3>
           <button className="text-slate-500 hover:text-white text-xl leading-none" onClick={onClose}>×</button>
         </div>
         {children}
@@ -313,11 +424,21 @@ export function Modal({ title, children, onClose }: { title: string; children: R
   )
 }
 
-export function Field({ label, children }: { label: string; children: React.ReactNode }) {
+export function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
   return (
-    <label className="block">
+    <label className={cn('block', className)}>
       <span className="text-xs font-medium text-slate-400 mb-1.5 block">{label}</span>
       {children}
     </label>
+  )
+}
+
+/** Label/value row used inside detail drawers. */
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-[#0b0e13] border border-slate-800/60 rounded-xl px-3 py-2">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="text-white break-words">{value}</div>
+    </div>
   )
 }

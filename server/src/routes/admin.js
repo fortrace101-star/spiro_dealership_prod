@@ -221,6 +221,17 @@ const RES_FROM = `
   LEFT JOIN users u ON u.id = r.reserved_by
 `;
 
+// FOR UPDATE queries lock the bike_reservations row (r) only. RES_SELECT needs
+// the LEFT JOIN to users for u.full_name, and PostgreSQL refuses a bare
+// FOR UPDATE on an outer join (0A000), so these call sites MUST use
+// "FOR UPDATE OF r" — never a plain "FOR UPDATE".
+const RES_FROM_FOR_UPDATE = `
+  FROM bike_reservations r
+  JOIN bikes b ON b.id = r.bike_id
+  JOIN customers c ON c.id = r.customer_id
+  LEFT JOIN users u ON u.id = r.reserved_by
+`;
+
 function shapeReservation(r) {
   const payments = (Array.isArray(r.reservations_payments) ? r.reservations_payments : []).map((p) => ({
     id: p.id, reservation_id: p.reservation_id, amount: Number(p.amount),
@@ -328,14 +339,33 @@ router.post('/reservations', requireRole(), async (req, res) => {
       [reservation.id, dp, payment_method || 'cash', req.user.id, transaction_ref || null, notes || null],
     );
 
-    // Flip the bike to 'reserved' so it can't be double-booked.
-    await client.query(
-      `UPDATE bikes SET status = 'reserved', reserved_at = now(), reserved_by = $1, updated_at = now()
-        WHERE id = $2`,
-      [req.user.id, bike_id],
-    );
+    // A down payment that already covers the whole price means the bike is paid
+    // off on the spot: close the reservation and mark the bike sold, rather than
+    // leaving a zero-balance 'active' reservation to be completed by hand.
+    if (balance <= 0.01) {
+      await client.query(
+        `UPDATE bike_reservations SET status = 'completed', balance = 0, completed_at = now(), updated_at = now()
+          WHERE id = $1`,
+        [reservation.id],
+      );
+      await client.query(
+        `UPDATE bikes SET status = 'sold', sold_at = now(), sold_price = $1, customer_id = $2, updated_at = now()
+          WHERE id = $3`,
+        [tp, customer_id, bike_id],
+      );
+    } else {
+      // Bike is only partially paid: flip it to 'reserved' so it can't be double-booked.
+      await client.query(
+        `UPDATE bikes SET status = 'reserved', reserved_at = now(), reserved_by = $1, updated_at = now()
+          WHERE id = $2`,
+        [req.user.id, bike_id],
+      );
+    }
 
     await audit({ userId: req.user.id, action: 'create_reservation', entity: 'bike_reservation', entityId: reservation.id, newValue: reservation });
+    if (balance <= 0.01) {
+      await audit({ userId: req.user.id, action: 'complete_reservation', entity: 'bike_reservation', entityId: reservation.id, oldValue: { status: 'active' }, newValue: { status: 'completed', balance: 0, paid_in_full: true } });
+    }
     await client.query('COMMIT');
     reservationId = reservation.id;
   } catch (err) {
@@ -360,7 +390,7 @@ router.post('/reservations/:id/payments', requireRole(), async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const r = await client.query(`${RES_SELECT}${RES_FROM} WHERE r.id = $1 FOR UPDATE`, [req.params.id]);
+    const r = await client.query(`${RES_SELECT}${RES_FROM_FOR_UPDATE} WHERE r.id = $1 FOR UPDATE OF r`, [req.params.id]);
     if (!r.rows[0]) throw Object.assign(new Error('Reservation not found'), { status: 404 });
     const resv = r.rows[0];
     if (resv.status !== 'active') {
@@ -414,7 +444,7 @@ router.post('/reservations/:id/complete', requireRole(), async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const r = await client.query(`${RES_SELECT}${RES_FROM} WHERE r.id = $1 FOR UPDATE`, [req.params.id]);
+    const r = await client.query(`${RES_SELECT}${RES_FROM_FOR_UPDATE} WHERE r.id = $1 FOR UPDATE OF r`, [req.params.id]);
     if (!r.rows[0]) throw Object.assign(new Error('Reservation not found'), { status: 404 });
     const resv = r.rows[0];
     if (resv.status !== 'active') {

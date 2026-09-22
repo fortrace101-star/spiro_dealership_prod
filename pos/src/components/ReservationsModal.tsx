@@ -5,6 +5,7 @@ import { api, getStoredUser } from '../lib/api'
 import { dateTime, PAYMENT_LABELS, ugx } from '../lib/format'
 import type { Bike, BikeReservation } from '../lib/types'
 import { cn } from '../lib/cn'
+import { isMobileDevice } from '../lib/isMobile'
 
 const PLAN_OPTIONS = [3, 6, 9, 12, 18, 24]
 const METHODS = ['cash', 'mobile_money', 'bank', 'card', 'credit']
@@ -131,24 +132,47 @@ function ListPane({
   onNew: () => void
   onOpen: (id: string) => void
 }) {
+  const mobile = isMobileDevice()
   return (
     <div>
-      <div className="flex flex-wrap gap-2 items-center mb-4">
-        {['active', 'completed', 'released', ''].map((f) => (
-          <button
-            key={f || 'all'}
-            onClick={() => setFilter(f)}
-            className={cn(
-              'px-3 py-1 rounded-full text-xs font-medium border transition',
-              filter === f ? 'bg-brand-500/15 text-brand-300 border-brand-500/40' : 'text-slate-400 border-slate-800 hover:border-slate-600',
-            )}
-          >
-            {f || 'All'}
-          </button>
-        ))}
-        <input className="input flex-1 min-w-[200px]" placeholder="Search VIN, model, customer…" value={q} onChange={(e) => setQ(e.target.value)} />
-        <button className="btn-primary text-xs" onClick={onNew}>+ New reservation</button>
+      {/* Filters — same responsive structure as Sales/Bikes:
+          Row 1: titled Status picker (full-width on narrow screens;
+                  there is only one filter here, so it fills the row).
+          Row 2: search fills remaining space + Search button pinned right;
+                  count sits one rhythm-step below the search field.
+          + New reservation keeps its own row below so it stays prominent. */}
+      <div className="card p-4 mb-4 space-y-3">
+        {/* Row 1: titled Status selector — POS has no admin-only `Field` or `useIsPhone`,
+            so we use a plain label + `isMobileDevice()` from `../lib/isMobile` for the
+            "Search…" vs "Search VIN, model, customer…" split. */}
+        <label className="block">
+          <span className="text-xs font-medium text-slate-400 mb-1.5 block">Status</span>
+          <select className="input w-full truncate text-[13px] sm:text-sm" value={filter} onChange={(e) => setFilter(e.target.value)}>
+            <option value="">{mobile ? 'All' : 'All statuses'}</option>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+            <option value="released">Released</option>
+            <option value="expired">Expired</option>
+          </select>
+        </label>
+
+        <form className="flex flex-wrap gap-3 items-start" onSubmit={(e) => e.preventDefault()}>
+          <div className="flex-1 min-w-0">
+            <input
+              className="input w-full text-xs sm:text-sm"
+              placeholder={mobile ? 'Search…' : 'Search VIN, model, customer…'}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+            {reservations && <div className="mt-3 text-xs text-slate-500">{reservations.length} reservations</div>}
+          </div>
+          <button type="button" className="btn-primary text-xs px-5" onClick={() => { setQ(''); setFilter('active') }}>Search</button>
+        </form>
       </div>
+
+      <button className="btn-primary w-full sm:w-auto mb-4" onClick={onNew}>
+        + New reservation
+      </button>
 
       {reservations === null ? (
         <div className="text-center text-sm text-slate-500 py-10">Loading…</div>

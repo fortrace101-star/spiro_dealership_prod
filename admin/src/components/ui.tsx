@@ -70,6 +70,36 @@ export function Badge({ kind, children }: { kind?: string; children: ReactNode }
   return <span className={cn('inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-medium capitalize', cls)}>{children}</span>
 }
 
+/** Status of a product's stock: OK (in stock) / Low (at or below reorder level) / Out (zero). */
+export type StockStatus = 'ok' | 'low' | 'out'
+
+export function stockStatus(stockQty: number, reorderLevel: number): StockStatus {
+  if (stockQty === 0) return 'out'
+  if (stockQty <= reorderLevel) return 'low'
+  return 'ok'
+}
+
+const STOCK_STATUS_META: Record<StockStatus, { label: string; fill: string; card: string; text: string }> = {
+  ok: { label: 'OK', fill: 'bg-emerald-400', card: 'bg-emerald-500/15 border-emerald-500/30', text: 'text-emerald-400' },
+  low: { label: 'Low', fill: 'bg-orange-400', card: 'bg-orange-500/15 border-orange-500/30', text: 'text-orange-400' },
+  out: { label: 'Out', fill: 'bg-red-400', card: 'bg-red-500/15 border-red-500/30', text: 'text-red-400' },
+}
+
+/** Card/text classes for a stock status — used by stat cards and chips alike. */
+export function stockStatusMeta(stockQty: number, reorderLevel: number) {
+  return STOCK_STATUS_META[stockStatus(stockQty, reorderLevel)]
+}
+
+/** Small inline pill for picker lists: tinted status fill + status label. */
+export function StockChip({ stockQty, reorderLevel }: { stockQty: number; reorderLevel: number }) {
+  const m = stockStatusMeta(stockQty, reorderLevel)
+  return (
+    <span className={cn('inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold text-slate-900', m.fill)}>
+      {m.label}
+    </span>
+  )
+}
+
 export function EmptyState({ message }: { message: string }) {
   return <div className="text-center text-sm text-slate-600 py-12">{message}</div>
 }

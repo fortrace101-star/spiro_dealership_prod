@@ -46,6 +46,15 @@ function shapeReservation(r) {
   };
 }
 
+/** Lock-only variant of RES_FROM: used by FOR UPDATE queries.
+ * LEFT JOINs don't play well with FOR UPDATE, so this strips the user
+ * join and only locks the reservation + its bike/customer joins. */
+const RES_FROM_FOR_UPDATE = `
+  FROM bike_reservations r
+  JOIN bikes b ON b.id = r.bike_id
+  JOIN customers c ON c.id = r.customer_id
+`;
+
 /** Single reservation with its payment trail (used by detail + after mutations). */
 async function fetchReservation(id) {
   const r = await one(`${RES_SELECT}${RES_FROM} WHERE r.id = $1`, [id]);
@@ -130,14 +139,31 @@ async function createReservation(input, actor) {
       [reservation.id, dp, payment_method || 'cash', actor.id, transaction_ref || null, notes || null],
     );
 
-    // Flip the bike to 'reserved' so it can't be double-booked.
-    await client.query(
-      `UPDATE bikes SET status = 'reserved', reserved_at = now(), reserved_by = $1, updated_at = now()
-        WHERE id = $2`,
-      [actor.id, bike_id],
-    );
+    // A down payment that already covers the whole price means the bike is paid
+    // off on the spot: close the reservation and mark the bike sold, rather than
+    // leaving a zero-balance 'active' reservation for someone to complete by hand.
+    if (balance <= 0.01) {
+      await client.query(
+        `UPDATE bike_reservations SET status = 'completed', balance = 0, completed_at = now(), updated_at = now() WHERE id = $1`,
+        [reservation.id],
+      );
+      await client.query(
+        `UPDATE bikes SET status = 'sold', sold_at = now(), sold_price = $1, customer_id = $2, updated_at = now() WHERE id = $3`,
+        [tp, customer_id, bike_id],
+      );
+    } else {
+      // Flip the bike to 'reserved' so it can't be double-booked.
+      await client.query(
+        `UPDATE bikes SET status = 'reserved', reserved_at = now(), reserved_by = $1, updated_at = now()
+          WHERE id = $2`,
+        [actor.id, bike_id],
+      );
+    }
 
     await audit({ userId: actor.id, action: 'create_reservation', entity: 'bike_reservation', entityId: reservation.id, newValue: reservation });
+    if (balance <= 0.01) {
+      await audit({ userId: actor.id, action: 'complete_reservation', entity: 'bike_reservation', entityId: reservation.id, oldValue: { status: 'active' }, newValue: { status: 'completed', balance: 0, paid_in_full: true } });
+    }
     await client.query('COMMIT');
     reservationId = reservation.id;
   } catch (err) {
@@ -163,12 +189,18 @@ async function recordInstallment(id, input, actor) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const r = await client.query(`${RES_SELECT}${RES_FROM} WHERE r.id = $1 FOR UPDATE`, [id]);
+    const r = await client.query(RES_SELECT + RES_FROM + ' WHERE r.id = $1', [id]);
     if (!r.rows[0]) throw Object.assign(new Error('Reservation not found'), { status: 404 });
     const resv = r.rows[0];
     if (resv.status !== 'active') {
       throw Object.assign(new Error(`Reservation is ${resv.status}; payments can only be recorded on active reservations`), { status: 400 });
     }
+
+    // Lock only the reservation row (FOR UPDATE over a LEFT JOIN in RES_FROM
+    // triggers "cannot use FOR UPDATE on a view/negative join" errors in some PG
+    // versions). We already have the joined row from the previous query above.
+    const lock = await client.query('SELECT id FROM bike_reservations WHERE id = $1 FOR UPDATE', [id]);
+    if (!lock.rows[0]) throw Object.assign(new Error('Reservation vanished — rolled back'), { status: 409 });
     const outstanding = Number(resv.balance);
     if (amt > outstanding) {
       throw Object.assign(new Error(`Payment exceeds outstanding balance (${outstanding})`), { status: 400 });
@@ -218,7 +250,7 @@ async function completeReservation(id, actor) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const r = await client.query(`${RES_SELECT}${RES_FROM} WHERE r.id = $1 FOR UPDATE`, [id]);
+    const r = await client.query(`${RES_SELECT}${RES_FROM} WHERE r.id = $1`, [id]);
     if (!r.rows[0]) throw Object.assign(new Error('Reservation not found'), { status: 404 });
     const resv = r.rows[0];
     if (resv.status !== 'active') {
@@ -227,6 +259,10 @@ async function completeReservation(id, actor) {
     if (Number(resv.balance) > 0.01) {
       throw Object.assign(new Error(`Cannot complete reservation — balance of ${Number(resv.balance)} is still outstanding`), { status: 400 });
     }
+
+    // Same FOR-UPDATE-safe split: lock the reservation row itself (no LEFT JOIN).
+    const lock = await client.query('SELECT id FROM bike_reservations WHERE id = $1 FOR UPDATE', [id]);
+    if (!lock.rows[0]) throw Object.assign(new Error('Reservation vanished — rolled back'), { status: 409 });
     await client.query(
       `UPDATE bike_reservations SET status = 'completed', balance = 0, completed_at = now(), updated_at = now() WHERE id = $1`,
       [id],

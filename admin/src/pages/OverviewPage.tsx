@@ -253,7 +253,7 @@ export default function OverviewPage() {
         <div className="card p-5">
           <h3 className="font-semibold text-white mb-4">Reorder alerts</h3>
           {low.length === 0 ? (
-            <EmptyState message="All stock levels healthy 🎉" />
+            <EmptyState message="All stock levels healthy" />
           ) : (
             <div className="overflow-x-auto">
             <table className="w-full">

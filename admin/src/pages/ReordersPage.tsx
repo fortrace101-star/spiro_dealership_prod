@@ -6,6 +6,7 @@ import { EmptyState, PageHeader, Spinner } from '../components/ui'
 import { Field, Modal } from './InventoryPage'
 import ReceiveStockModal from '../components/ReceiveStockModal'
 import { printHtml, escapeHtml } from '../lib/print'
+import { usePageSize } from '../lib/usePageSize'
 
 interface Line {
   product_id: string | null
@@ -56,7 +57,7 @@ function printDetail(tab: 'reorders' | 'consignments', d: PurchasingRecord): voi
   printHtml(
     title,
     `<h1>${escapeHtml(title)}</h1>
-<div class="meta">${isReorder ? 'Reorder list' : 'Received Stock'} · by ${escapeHtml(d.created_by_name || '—')} · ${escapeHtml(dateTime(d.created_at))}${d.notes ? ` · ${escapeHtml(d.notes)}` : ''}${!isReorder && (d.source_list_title || d.source_list_id) ? ` · Fulfills ${escapeHtml(d.source_list_title || 'Reorder list')}` : ''}</div>
+<div class="meta">${isReorder ? 'Reorder list' : 'Received consignment'} · prepared by ${escapeHtml(d.created_by_name || '—')} · ${escapeHtml(dateTime(d.created_at))}${d.notes ? ` · ${escapeHtml(d.notes)}` : ''}${!isReorder && (d.source_list_title || d.source_list_id) ? ` · Fulfills: ${escapeHtml(d.source_list_title || 'Reorder list')}` : ''}</div>
 <table><thead><tr><th>SKU</th><th>Product</th><th class="num">Qty</th><th class="num">Unit cost</th><th class="num">Line total</th></tr></thead>
 <tbody>${rows}</tbody><tfoot>${totals}</tfoot></table>`,
   )
@@ -69,6 +70,8 @@ export default function ReordersPage() {
   const [products, setProducts] = useState<Product[] | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [error, setError] = useState('')
+  const [page, setPage] = useState(1)
+  const pageSize = usePageSize()
 
   const load = useCallback(async () => {
     setRecords(null)
@@ -77,6 +80,7 @@ export default function ReordersPage() {
   }, [tab, statusFilter])
 
   useEffect(() => {
+    setPage(1) // reset page when the tab or status filter changes
     load().catch(() => setRecords([]))
   }, [load])
 
@@ -124,6 +128,13 @@ export default function ReordersPage() {
   const listValue = (r: PurchasingRecord) =>
     r.items.reduce((s, i) => s + i.qty * (Number(i.unit_cost) || 0), 0)
 
+  // Client-side pagination (10 rows on phones / 20 on PC), matching the other tables.
+  const totalPages = Math.max(1, Math.ceil((records?.length || 0) / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const pageItems = (records || []).slice((safePage - 1) * pageSize, safePage * pageSize)
+  const rangeFrom = (records?.length || 0) === 0 ? 0 : (safePage - 1) * pageSize + 1
+  const rangeTo = Math.min(safePage * pageSize, records?.length || 0)
+
   return (
     <div>
       <PageHeader
@@ -137,7 +148,7 @@ export default function ReordersPage() {
           Reorder lists
         </button>
         <button className={tab === 'consignments' ? 'btn-primary text-xs' : 'btn-ghost text-xs'} onClick={() => setTab('consignments')}>
-          Received consignments
+          Received stock
         </button>
         {products && (
           <span className="ml-auto text-sm text-slate-500 self-center">
@@ -189,18 +200,18 @@ export default function ReordersPage() {
                   {tab === 'consignments' && <th className="th col-opt">Supplier</th>}
                   <th className="th text-right">{tab === 'reorders' ? 'Est. value' : 'Items total'}</th>
                   {tab === 'consignments' && <th className="th col-opt text-right">Delivery</th>}
-                  <th className="th col-opt">Received By</th>
+                  <th className="th col-opt">Prepared by</th>
                   <th className="th">When</th>
                 </tr>
               </thead>
               <tbody>
-                {records.map((r) => (
+                {pageItems.map((r) => (
                   <tr key={r.id} className="hover:bg-slate-800/30 cursor-pointer" onClick={() => setDetail(r)}>
                     <td className="td">
                       <div className="font-medium text-white underline decoration-slate-600 underline-offset-2">{tab === 'reorders' ? r.title : r.reference}</div>
                       {r.notes && <div className="text-xs text-slate-500">{r.notes}</div>}
                       {tab === 'consignments' && (r.source_list_title || r.source_list_id) && (
-                        <div className="text-[11px] text-sky-300">Fulfills {r.source_list_title || 'Reorder list'}</div>
+                        <div className="text-[11px] text-sky-300">Fulfills: {r.source_list_title || 'Reorder list'}</div>
                       )}
                     </td>
                     <td className="td col-opt text-slate-400 text-xs">
@@ -229,6 +240,18 @@ export default function ReordersPage() {
           </div>
         )}
       </div>
+
+      {/* Pagination */}
+      {records && records.length > 0 && (
+        <div className="flex items-center justify-between mt-3 text-sm">
+          <span className="text-slate-500">Showing {rangeFrom}–{rangeTo} of {records.length}</span>
+          <div className="flex items-center gap-2">
+            <button className="btn-ghost text-xs" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>← Prev</button>
+            <span className="text-slate-400 text-xs">Page {safePage} of {totalPages}</span>
+            <button className="btn-ghost text-xs" disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}>Next →</button>
+          </div>
+        </div>
+      )}
 
       {lowStock.length > 0 && tab === 'reorders' && (
         <div className="card p-4 mt-4">

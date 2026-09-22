@@ -98,6 +98,8 @@ mobile, the full form from `sm:` up. Only one is in the layout at a time.
 |---|---|---|---|
 | Customers | Lifetime value | `compactUgx()` → `UGX 12.5M` | `ugx()` → `UGX 12,500,000` |
 | Audit Trail | When | `timeAgo()` → `2h ago` | `dateTime()` → `20 Sep, 14:32` |
+| Inventory | Cost | `compactUgx()` → `UGX 12.5M` | `ugx()` → `UGX 12,500,000` |
+| Inventory | Price | `compactUgx()` → `UGX 12.5M` | `ugx()` → `UGX 12,500,000` |
 
 ```tsx
 <td className="td text-right font-semibold text-white tabular-nums whitespace-nowrap">
@@ -113,6 +115,11 @@ Helpers live in `src/lib/format.ts`: `ugx`, `compactUgx`, `num`, `dateTime`,
 
 The identifying cell carries `font-medium text-white`; any secondary line inside
 the same cell is `text-[11px] text-slate-500`.
+
+**Barcode rule:** identifier sublines show the **SKU only**. Barcodes are
+deliberately kept out of table cells — they are too long for a phone subline and
+push rows wide — and live in the row's detail drawer header instead (where the
+full `sku · barcode` line is shown). Applies to Inventory's product cell.
 
 ```tsx
 <td className="td">
@@ -215,11 +222,11 @@ view exists or add one (Rule 2).
 
 | Page / table | Keep on mobile | Hide with `col-opt` |
 |---|---|---|
-| Inventory (main, 8 cols) | Product, Price, Stock, Status + actions | Category, Cost, Margin |
-| Sales (main, 7 cols) | Receipt, Date, Total | Cashier, Customer, Payment, Profit |
+| Inventory (main) | ✅ done | Category, Status, Actions (phones merge Cost/Price into one stacked column; PC keeps them separate) |
+| Sales (main, 7 cols) | ✅ done | Receipt, Cashier, Customer |
 | Sales (items sub-table) | all — already fits | — |
 | Purchasing (item table inside the modal) | SKU, Product, Qty, Line total | Unit cost |
-| Bikes (7 cols) | VIN, Model, Status | Battery, Cost, Price, Customer |
+| Bikes (7 cols) | ✅ done | Battery (Model/VIN + Cost/Price stack on phones, separate on PC) |
 | Approvals (5 + action) | Type, Request, Status + actions | Requested by, When |
 | Team & codes (4 cols) | all four | Expires, only if it still overflows |
 | Settings (staff, 5 cols) | Name, Revenue | Sales, Profit, Discounts |
@@ -230,10 +237,67 @@ view exists or add one (Rule 2).
 | Audit Trail | ✅ done | Entity, Changes |
 | Purchasing (Received consignments / Reorder lists) | ✅ done | Items, Supplier, Delivery, Prepared by |
 
-**Sales note:** the main Sales table has no per-sale drawer equivalent to
-Customers/Audit. Before hiding Cashier / Customer / Payment / Profit there,
-either confirm the row opens a sale detail view, or leave those columns visible
-until one exists.
+**Sales note:** ~~the main Sales table has no per-sale drawer equivalent to
+Customers/Audit~~ resolved — Sales rows already open the right-side detail
+drawer (`openDetail`), which contains the receipt number, cashier, customer,
+payment method, status and full profit breakdown, so hiding columns is safe.
+
+### Sales — approved display set
+
+**File:** `src/pages/SalesPage.tsx`
+
+| Column | Mobile | Notes |
+|---|---|---|
+| Receipt | `col-opt` | still visible in the drawer header (`openDetail`) — the row's identifying reference remains reachable (Rule 2) |
+| Date | shown, compact | `timeAgo` on phone, `dateTime` from `sm:` up (same pattern as Audit Trail) |
+| Cashier | `col-opt` | in the drawer as the "Cashier" card |
+| Customer | `col-opt` | in the drawer as the "Customer" card |
+| Payment | shown | `Badge` unchanged |
+| Total | shown, compact | `compactUgx` on phone, `ugx` from `sm:` up |
+| Profit | shown, compact | `compactUgx` on phone, `ugx` from `sm:` up; last visible cell on mobile, carries the `›` chevron |
+
+Display set approved by the developer (Rule 0): **Date, Payment, Total, Profit**
+visible on mobile; Receipt, Cashier, Customer hidden. Pagination was already in
+place (`usePageSize()`, 10 mobile / 20 PC) before this conversion.
+
+### Bikes — approved display set
+
+**File:** `src/pages/BikesPage.tsx`
+
+| Column | Mobile | Notes |
+|---|---|---|
+| Model + VIN | shown, stacked | primary cell — Model over the bare VIN subline (breakpoint split: `sm:hidden` stacked cell, `col-opt` separate VIN/Model columns on PC) |
+| Battery | `col-opt` | in the drawer as Battery serial / Battery spec cards |
+| Cost / Price | shown, stacked, compact | merged cell on phones (Cost over a thin hr over Price, colors kept, `compactUgx`); separate Cost and Price columns on PC with full `ugx` |
+| Status | shown | `Badge` unchanged; last-cell `›` chevron lives in Customer |
+| Customer | shown | `text-slate-400`; carries the mobile chevron |
+
+Rows open a bike detail drawer (VIN, battery, motor, cost, odometer, location,
+customer, dates) with 360-trace and Reserve actions. Display set approved by the
+developer (Rule 0).
+
+### Inventory - approved display set
+
+**File:** `src/pages/InventoryPage.tsx`
+
+| Column | Mobile | Notes |
+|---|---|---|
+| Product | shown | name `font-medium text-white` + SKU-only subline (barcode lives in the drawer header, per the Rule 4 barcode rule) |
+| Category | `col-opt` | in the drawer as the "Category" card |
+| Cost / Price | shown, stacked, compact (phones only) | one merged cell on phones: Cost over Price split by a thin `border-t border-slate-800/80` divider; both lines `compactUgx`, Cost muted `text-slate-400`, Price white; from `sm:` up the merged cell is replaced by separate full-width Cost and Price columns (`col-opt`) showing `ugx()` |
+| Margin | shown | percentage, `tabular-nums` |
+| Stock | shown, colored | count, `tabular-nums`, tinted with its status color (emerald / orange / red) so the status reads without the Status column; carries the `›` chevron on phones |
+| Status | `col-opt` | OK / Low / Out dot from `sm:` up only — the colors are already on the Stock cell; a mobile-only legend under the table spells out the three colors (OK — in stock, Low — at/below reorder level, Out — zero stock) |
+| Actions | `col-opt` | Edit / History / Adjust from `sm:` up; on phones the drawer footer has Movement history / Adjust stock / Edit product, with `stopPropagation` on the cell |
+
+Display set approved by the developer (Rule 0): **Product, Cost/Price (merged on
+phones only), Margin, Stock** visible on mobile; Category, Status and Actions
+hidden (`col-opt`). Stock carries the status color on mobile, with a legend row
+under the table; from `sm:` up the table shows separate Cost, Price and Status
+columns. A product detail drawer was added in this pass (Rule 2) showing every
+hidden column plus brand, supplier, stock value, min stock, reorder level,
+status and last-updated. Pagination added with `usePageSize()` (10 mobile /
+20 PC); page resets to 1 on filter change.
 
 ---
 
@@ -266,3 +330,92 @@ After any table layout change, confirm:
   a table where hiding columns still isn't enough.
 - **`whitespace-nowrap` on a full-width value defeats the purpose** — pair it
   with the compact mobile form (Rule 3), not on its own.
+
+---
+
+## Pagination (PC vs. Mobile)
+
+### The standard
+
+All paginated admin tables use a **dual page-size** that scales with the screen:
+
+  | Screen      | Items shown | Rationale |
+  |---|---|---|
+  | PC / tablet (`sm:`+) | **20** rows | A 14–16" desktop can read 20 rows comfortably; fewer paginations reduces clicks. |
+  | Mobile phone (below `sm:`, i.e. < 640 px) | **10** rows | Half the viewport width means rows are longer (wrapped / stacked); 10 keeps the list scannable without thumbing past content. |
+
+The page size is resolved **client-side at render time** from the viewport width, so it changes live as a window is resized — no reload required. The server API is unchanged; each list is fetched once (or reloaded on filter change) and the client slices it into pages.
+
+### How it's implemented
+
+A single shared helper decides the page size, consumed by every paginated page:
+
+```ts
+// src/lib/usePageSize.ts
+import { useState, useEffect, useMemo } from 'react'
+
+export function usePageSize() {
+  const [vw, setVw] = useState<typeof window.innerWidth>(typeof window !== 'undefined' ? window.innerWidth : 1024)
+  useEffect(() => {
+    const on = () => setVw(window.innerWidth)
+    window.addEventListener('resize', on)
+    return () => window.removeEventListener('resize', on)
+  }, [])
+  return useMemo(() => (vw < 640 ? 10 : 20), [vw])
+}
+```
+
+A page then slices the loaded records and renders standard Prev/Next controls:
+
+```tsx
+const pageSize = usePageSize()
+const totalPages = Math.max(1, Math.ceil((records?.length || 0) / pageSize))
+const safePage = Math.min(page, totalPages)
+const pageItems = (records || []).slice((safePage - 1) * pageSize, safePage * pageSize)
+// …
+{records && records.length > 0 && (
+  <div className="flex items-center justify-between mt-3 text-sm">
+    <span className="text-slate-500">Showing {rangeFrom}–{rangeTo} of {records.length}</span>
+    <div className="flex items-center gap-2">
+      <button className="btn-ghost text-xs" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>← Prev</button>
+      <span className="text-slate-400 text-xs">Page {safePage} of {totalPages}</span>
+      <button className="btn-ghost text-xs" disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}>Next →</button>
+    </div>
+  </div>
+)}
+```
+
+### Current state (what's already paginated)
+
+  | Page | Paginated? | Current page size | Notes |
+  |---|---|---|---|
+  | Sales | ✅ Yes | `usePageSize()` — 10 mobile / 20 PC | Live since this change |
+  | Purchasing / Reorders | ✅ Yes | `usePageSize()` — 10 mobile / 20 PC | Both tabs share one table — pagination covers Reorder lists **and** Received consignments; page resets on tab / status-filter change |
+  | Inventory | ❌ No | — | Renders all rows at once |
+  | Bikes | ❌ No | — | Renders all rows at once |
+  | Customers | ❌ No | — | Renders all rows at once |
+  | Approvals | ❌ No | — | Renders all rows at once |
+  | Audit Trail | ❌ No | — | Renders all rows at once |
+  | Team & codes | ❌ No | — | Renders all rows at once |
+  | Overview tables (low stock, stock value, recent sales) | ❌ No | — | Overview cards, 5–15 rows max — intentionally not paginated |
+
+### Rollout plan
+
+1. **~~Create `src/lib/usePageSize.ts`~~ done** — the helper lives at `src/lib/usePageSize.ts` (one file, shared by all pages).
+2. **~~Sales page~~ done** — Sales uses `const pageSize = usePageSize()`; `totalPages` / `pageItems` / `rangeFrom` / `rangeTo` all derive from it.
+3. **Tables with >30 rows in production** (Inventory, Bikes, Customers, Approvals, Audit, Team) — add `usePageSize()`, page-state, and the Prev/Next block. Priority order: Inventory → Customers → Approvals → Audit → Bikes → Team.
+4. **Overview cards** — leave unpaginated (they show summaries capped at a small number of rows by construction).
+5. **Verification checklist** — for each page:
+   - Page size is **10** at 375 px (DevTools), **20** at 768 px and up.
+   - Resizing the browser mid-session flips the page size and stays on a valid page (e.g. page 3 on mobile → page 2 on desktop if desktop would be empty).
+   - "Showing 1–10 of 34" correctly reflects the slice; the `–` is an en-dash (Rule 3 compact form applies to numbers in all locales).
+   - Prev/Next buttons disable correctly at boundaries.
+   - No horizontal scroll bar on mobile (the `col-opt` + drawer standard still applies — pagination is the *vertical* companion to the *horizontal* column standard).
+
+### Gotchas
+
+- **The page-size breakpoint is 640 px (`sm:`), the same boundary as `col-opt`.** Keep them identical — a reader narrower than 640 px should never see 20 rows of a 5-column mobile layout.
+- **Page state must reset on filter/sort change.** If a user is on page 3 and then filters to a result set that only has 1 page, land them on page 1, not an empty page (the `safePage = Math.min(page, totalPages)` guard handles this).
+- **`OverviewPage` detail drawers** (sales / low-stock / etc.) are bounded lists by intent — do not paginate them. The overview itself shows a summary; the drawer shows the complete relevant set.
+- **Do not push pagination to the server yet.** The API fetches full lists today; server-side paging is a future optimization once any list exceeds ~200 rows.
+

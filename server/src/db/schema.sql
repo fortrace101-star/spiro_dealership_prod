@@ -241,12 +241,22 @@ CREATE TABLE IF NOT EXISTS bike_installment_payments (
 CREATE INDEX IF NOT EXISTS idx_installments_reservation ON bike_installment_payments (reservation_id);
 
 -- ============ REVENUE RECORDS (all-time high tracking) ============
--- Single-row table holding the highest single-day revenue recorded.
+-- One row per period kind: 'week' holds the highest single ISO-week revenue
+-- recorded, 'month' the highest single calendar-month revenue. The old
+-- single-row (id = 1) table is migrated by the ALTERs below.
 CREATE TABLE IF NOT EXISTS revenue_records (
   id INT PRIMARY KEY DEFAULT 1,
+  period TEXT NOT NULL DEFAULT 'day' UNIQUE,
   revenue NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (revenue >= 0),
   date DATE NOT NULL DEFAULT CURRENT_DATE
 );
+ALTER TABLE revenue_records ADD COLUMN IF NOT EXISTS period TEXT NOT NULL DEFAULT 'day';
+-- Older installs lack the uniqueness needed for the per-period upsert.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'revenue_records_period_key') THEN
+    ALTER TABLE revenue_records ADD CONSTRAINT revenue_records_period_key UNIQUE (period);
+  END IF;
+END $$;
 
 -- Migration for older installs
 ALTER TABLE bikes ADD COLUMN IF NOT EXISTS reserved_at TIMESTAMPTZ;

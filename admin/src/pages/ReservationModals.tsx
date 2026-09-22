@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useIsPhone } from '../lib/usePageSize'
 import { api } from '../lib/api'
 import { cn } from '../lib/cn'
 import { dateTime, num, PAYMENT_LABELS, ugx } from '../lib/format'
@@ -44,27 +45,48 @@ export function ReservationsTabContent({
   onReserve: () => void
   onOpenDetail: (id: string) => void
 }) {
+  const phone = useIsPhone()
   return (
     <div>
-      <div className="card p-4 mb-4 flex flex-wrap gap-3 items-center">
-        <input
-          className="input w-full sm:max-w-xs"
-          placeholder="Search VIN, model, customer…"
-          value={resQ}
-          onChange={(e) => setResQ(e.target.value)}
-        />
-        <select className="input w-full sm:max-w-[160px]" value={resFilter} onChange={(e) => setResFilter(e.target.value)}>
-          <option value="">All statuses</option>
-          <option value="active">Active</option>
-          <option value="completed">Completed</option>
-          <option value="released">Released</option>
-          <option value="expired">Expired</option>
-        </select>
-        <button className="btn-primary w-full sm:w-auto" onClick={onReserve}>
-          + Reserve bike
-        </button>
-        {reservations && <span className="text-sm text-slate-500 ml-auto">{reservations.length} reservations</span>}
+      {/* Filters — same responsive structure as the Sales/Bikes filter card:
+          Row 1: titled Status picker (compact text, short label on phone).
+          Row 2: search fills remaining space + Search button pinned right;
+                  count sits one rhythm-step below the search field.
+          + Reserve bike keeps its own row below so it stays a prominent
+          action rather than crowding the filter row. */}
+      <div className="card p-4 mb-4 space-y-3">
+        {/* Row 1: titled Status picker */}
+        <Field label="Status" className="w-full">
+          <select className="input w-full truncate text-[13px] sm:text-sm" value={resFilter} onChange={(e) => setResFilter(e.target.value)}>
+            <option value="">{phone ? 'All' : 'All statuses'}</option>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+            <option value="released">Released</option>
+            <option value="expired">Expired</option>
+          </select>
+        </Field>
+
+        <form
+          className="flex flex-wrap gap-3 items-start"
+          onSubmit={(e) => e.preventDefault()}
+        >
+          <div className="flex-1 min-w-0">
+            <input
+              className="input w-full text-[13px] sm:text-sm"
+              aria-label="Search reservations"
+              placeholder={phone ? 'Search…' : 'Search VIN, model, customer…'}
+              value={resQ}
+              onChange={(e) => setResQ(e.target.value)}
+            />
+            {reservations && <div className="mt-3 text-xs text-slate-500">{reservations.length} reservations</div>}
+          </div>
+          <button type="submit" className="btn-primary text-xs px-5">Search</button>
+        </form>
       </div>
+
+      <button className="btn-primary w-full sm:w-auto mb-4" onClick={onReserve}>
+        + Reserve bike
+      </button>
 
       <div className="card overflow-hidden">
         {reservations === null ? (

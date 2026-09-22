@@ -78,17 +78,19 @@ function stockWarning(product, qty, context) {
   };
 }
 
-/** Payload when today's revenue sets a new all-time high. */
-function revenueRecord(newRevenue, prevRevenue, date) {
+/** Payload when revenue sets a new all-time high for a period ('week' | 'month'). */
+function revenueRecord(newRevenue, prevRevenue, date, period = 'day') {
   const fmt = (n) => Number(n || 0).toLocaleString('en-UG', { maximumFractionDigits: 0 });
+  const label = period === 'month' ? 'month' : period === 'day' ? 'day' : 'week';
   return {
     title: '📈 Revenue record',
-    body: `New all-time high: UGX ${fmt(newRevenue)} on ${date} (previous UGX ${fmt(prevRevenue)})`,
+    body: `New all-time ${label} high: UGX ${fmt(newRevenue)} (${date}; previous UGX ${fmt(prevRevenue)})`,
     url: '/reports',
-    tag: 'revenue-record:' + date,
+    tag: `revenue-record:${period}:${date}`,
     revenue: Number(newRevenue || 0),
     previous: Number(prevRevenue || 0),
     date,
+    period,
   };
 }
 

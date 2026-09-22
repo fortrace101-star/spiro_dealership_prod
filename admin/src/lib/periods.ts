@@ -2,6 +2,8 @@
 export interface Period {
   id: string
   label: string
+  /** Compact label for phone-width pickers (falls back to `label`) */
+  short?: string
   /** Day-count window ending today; ignored when from/to are set */
   days?: number
   /** Explicit calendar window (ISO dates) */
@@ -46,19 +48,19 @@ function startOfHalf(offset = 0): Date {
 }
 
 export const PERIODS: Period[] = [
-  { id: 'today', label: 'Today', days: 1 },
-  { id: '3d', label: 'Past 3 days', days: 3 },
-  { id: 'week', label: 'This week', from: iso(startOf('week')), to: iso(new Date()) },
-  { id: '2w', label: 'Past 2 weeks', days: 14 },
-  { id: 'month', label: 'This month', from: iso(startOf('month')), to: iso(new Date()) },
-  { id: 'quarter', label: 'This quarter', from: iso(startOf('quarter')), to: iso(new Date()) },
-  { id: 'half', label: 'This half', from: iso(startOfHalf()), to: iso(new Date()) },
-  { id: 'year', label: 'This year', from: iso(startOf('year')), to: iso(new Date()) },
+  { id: 'today', label: 'Today', short: 'Today', days: 1 },
+  { id: '3d', label: 'Past 3 days', short: '3 days', days: 3 },
+  { id: 'week', label: 'This week', short: 'Week', from: iso(startOf('week')), to: iso(new Date()) },
+  { id: '2w', label: 'Past 2 weeks', short: '2 weeks', days: 14 },
+  { id: 'month', label: 'This month', short: 'Month', from: iso(startOf('month')), to: iso(new Date()) },
+  { id: 'quarter', label: 'This quarter', short: 'Quarter', from: iso(startOf('quarter')), to: iso(new Date()) },
+  { id: 'half', label: 'This half', short: 'Half', from: iso(startOfHalf()), to: iso(new Date()) },
+  { id: 'year', label: 'This year', short: 'Year', from: iso(startOf('year')), to: iso(new Date()) },
 ]
 
 /** Custom windows: last N days or a full from/to pair, capped at 2 years. */
 export function customPeriod(days?: number, from?: string, to?: string): Period {
-  if (from && to) return { id: 'custom', label: 'Custom range', from, to }
+  if (from && to) return { id: 'custom', label: 'Custom range', short: 'Custom', from, to }
   const d = Math.min(Math.max(Number(days) || 30, 1), 730)
-  return { id: 'custom', label: `Last ${d} days`, days: d }
+  return { id: 'custom', label: `Last ${d} days`, short: `${d}d`, days: d }
 }

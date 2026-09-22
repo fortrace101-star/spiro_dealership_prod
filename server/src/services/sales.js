@@ -200,19 +200,28 @@ async function recordSale(input, actor) {
           }
         }
       } catch {}
-      // Revenue all-time high check
+      // Revenue all-time high check — weekly and monthly record totals.
+      // Week key: ISO week (Monday-start). Month key: first day of the month.
       try {
-        const todayTotal = await client.query(`SELECT COALESCE(sum(total),0) AS t FROM sales WHERE date(created_at) = CURRENT_DATE`)
-        const prev = await client.query(`SELECT COALESCE(max(revenue),0) AS r FROM revenue_records WHERE id = 1`)
-        if (Number(todayTotal.rows[0]?.t || 0) > Number(prev.rows[0]?.r || 0)) {
-          const rec = await client.query(
-            `INSERT INTO revenue_records (id, revenue, date) VALUES (1, $1, CURRENT_DATE)
-             ON CONFLICT (id) DO UPDATE SET revenue = $1, date = CURRENT_DATE
-             RETURNING revenue`,
-            [Number(todayTotal.rows[0]?.t || 0)]
-          )
-          pushSvc.notifyAdmins(pushSvc.revenueRecord(rec.rows[0]?.revenue || 0, prev.rows[0]?.r || 0, new Date().toISOString().slice(0, 10))).catch(() => {})
+        const weekTotal = await client.query(`SELECT COALESCE(sum(total),0) AS t FROM sales WHERE date_trunc('week', created_at) = date_trunc('week', CURRENT_DATE)`)
+        const monthTotal = await client.query(`SELECT COALESCE(sum(total),0) AS t FROM sales WHERE date_trunc('month', created_at) = date_trunc('month', CURRENT_DATE)`)
+
+        const bump = async (period, total, label) => {
+          const cur = Number(total || 0)
+          const prev = await client.query(`SELECT COALESCE(max(revenue),0) AS r FROM revenue_records WHERE period = $1`, [period])
+          if (cur > Number(prev.rows[0]?.r || 0)) {
+            const rec = await client.query(
+              `INSERT INTO revenue_records (period, revenue, date) VALUES ($1, $2, CURRENT_DATE)
+               ON CONFLICT (period) DO UPDATE SET revenue = $2, date = CURRENT_DATE
+               RETURNING revenue`,
+              [period, cur]
+            )
+            pushSvc.notifyAdmins(pushSvc.revenueRecord(rec.rows[0]?.revenue || 0, prev.rows[0]?.r || 0, new Date().toISOString().slice(0, 10), label)).catch(() => {})
+          }
         }
+
+        await bump('week', weekTotal.rows[0]?.t, 'week')
+        await bump('month', monthTotal.rows[0]?.t, 'month')
       } catch {}
     });
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api'
 import type { Product, PurchasingListItem, PurchasingRecord } from '../lib/types'
 import { ugx } from '../lib/format'
+import { StockChip } from './ui'
 import { cn } from '../lib/cn'
 
 type DraftLine = PurchasingListItem & { key: string }
@@ -140,8 +141,13 @@ export default function ReceiveStockModal({ list, onClose, onDone }: Props) {
               {prods !== null && avail.length === 0 && <div className="text-xs text-slate-500 py-6 text-center">No products match.</div>}
               {avail.map((p) => (
                 <button key={p.id} type="button" onClick={() => addOne(p)} className="w-full text-left px-2.5 py-2 rounded-lg border border-slate-800 hover:border-brand-500/50">
-                  <div className="text-sm text-white truncate">{p.name}</div>
-                  <div className="text-[11px] text-slate-500 font-mono">{p.sku} · {p.stock_qty} in stock</div>
+                  <div className="flex items-end justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm text-white truncate">{p.name}</div>
+                      <div className="text-[11px] text-slate-500 font-mono">{p.sku} · {p.stock_qty} in stock</div>
+                    </div>
+                    <StockChip stockQty={p.stock_qty} reorderLevel={p.reorder_level} />
+                  </div>
                 </button>
               ))}
             </div>

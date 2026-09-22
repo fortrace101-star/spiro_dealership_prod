@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import { dateTime, num, PAYMENT_LABELS, ugx } from '../lib/format'
+import { compactUgx, dateTime, num, PAYMENT_LABELS, timeAgo, ugx } from '../lib/format'
 import { PERIODS } from '../lib/periods'
 import type { Period } from '../lib/periods'
 import type { Sale, SaleItem } from '../lib/types'
 import { Badge, EmptyState, PageHeader, Spinner } from '../components/ui'
 import { PeriodPicker } from '../components/PeriodPicker'
-
-const PAGE_SIZE = 20
+import { Field } from './InventoryPage'
+import { useIsPhone, usePageSize } from '../lib/usePageSize'
 
 export default function SalesPage() {
   const [sales, setSales] = useState<Sale[] | null>(null)
@@ -16,6 +16,8 @@ export default function SalesPage() {
   const [payment, setPayment] = useState('')
   const [detail, setDetail] = useState<{ sale: Sale; items: SaleItem[] } | null>(null)
   const [page, setPage] = useState(1)
+  const pageSize = usePageSize()
+  const phone = useIsPhone()
 
   const load = useCallback(async () => {
     const params = new URLSearchParams()
@@ -43,28 +45,62 @@ export default function SalesPage() {
     setDetail(r)
   }
 
-  const totalPages = Math.max(1, Math.ceil((sales?.length || 0) / PAGE_SIZE))
+  const totalPages = Math.max(1, Math.ceil((sales?.length || 0) / pageSize))
   const safePage = Math.min(page, totalPages)
-  const pageItems = (sales || []).slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
-  const rangeFrom = (sales?.length || 0) === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1
-  const rangeTo = Math.min(safePage * PAGE_SIZE, sales?.length || 0)
+  const pageItems = (sales || []).slice((safePage - 1) * pageSize, safePage * pageSize)
+  const rangeFrom = (sales?.length || 0) === 0 ? 0 : (safePage - 1) * pageSize + 1
+  const rangeTo = Math.min(safePage * pageSize, sales?.length || 0)
 
   return (
     <div>
       <PageHeader title="Sales" subtitle="Every transaction across the dealership" />
 
       <div className="card p-4 mb-4 space-y-3">
-        <PeriodPicker period={period} onChange={setPeriod} />
-        <div className="flex flex-wrap gap-3 items-center">
-          <input className="input w-full sm:max-w-xs" placeholder="Search receipt, cashier, customer…" value={q} onChange={(e) => setQ(e.target.value)} />
-          <select className="input w-full sm:max-w-[180px]" value={payment} onChange={(e) => setPayment(e.target.value)}>
-            <option value="">All payments</option>
-            {Object.entries(PAYMENT_LABELS).map(([k, v]) => (
-              <option key={k} value={k}>{v}</option>
-            ))}
-          </select>
-          {sales && <span className="text-sm text-slate-500 ml-auto">{sales.length} transactions</span>}
+        {/* Row 1: period + payment filters side by side, compact text, titled */}
+        <div className="flex flex-wrap gap-3">
+          <div className="flex-1 min-w-[150px]">
+            <Field label="Pick period">
+              <PeriodPicker period={period} onChange={setPeriod} variant="select" />
+            </Field>
+          </div>
+          <div className="flex-1 min-w-[130px]">
+            <Field label="Payment type">
+              <select
+                className="input w-full text-[13px] sm:text-sm"
+                aria-label="Payment method"
+                value={payment}
+                onChange={(e) => setPayment(e.target.value)}
+              >
+                <option value="">All payments</option>
+                {Object.entries(PAYMENT_LABELS).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
         </div>
+
+        {/* Row 2: search fills the remaining space, button pinned right-most;
+            the transactions count sits directly below the search field */}
+        <form
+          className="flex flex-wrap gap-3 items-start"
+          onSubmit={(e) => {
+            e.preventDefault()
+            load().catch(() => setSales([]))
+          }}
+        >
+          <div className="flex-1 min-w-0">
+            <input
+              className="input w-full text-[13px] sm:text-sm"
+              aria-label="Search sales"
+              placeholder={phone ? 'Search…' : 'Search receipt, cashier, customer…'}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+            {sales && <div className="mt-3 text-xs text-slate-500">{sales.length} transactions</div>}
+          </div>
+          <button type="submit" className="btn-primary text-xs px-5">Search</button>
+        </form>
       </div>
 
       <div className="card overflow-hidden">
@@ -77,10 +113,10 @@ export default function SalesPage() {
             <table className="w-full">
               <thead>
                 <tr>
-                  <th className="th">Receipt</th>
+                  <th className="th col-opt">Receipt</th>
                   <th className="th">Date</th>
-                  <th className="th">Cashier</th>
-                  <th className="th">Customer</th>
+                  <th className="th col-opt">Cashier</th>
+                  <th className="th col-opt">Customer</th>
                   <th className="th">Payment</th>
                   <th className="th text-right">Total</th>
                   <th className="th text-right">Profit</th>
@@ -89,13 +125,23 @@ export default function SalesPage() {
               <tbody>
                 {pageItems.map((s) => (
                   <tr key={s.id} className="hover:bg-slate-800/30 cursor-pointer" onClick={() => openDetail(s.id)}>
-                    <td className="td font-mono text-xs text-brand-300">{s.receipt_no}</td>
-                    <td className="td text-slate-400">{dateTime(s.created_at)}</td>
-                    <td className="td">{s.cashier_name || '—'}</td>
-                    <td className="td text-slate-400">{s.customer_name || 'Walk-in'}</td>
+                    <td className="td col-opt font-mono text-xs text-brand-300">{s.receipt_no}</td>
+                    <td className="td text-slate-400 whitespace-nowrap">
+                      <span className="sm:hidden">{timeAgo(s.created_at)}</span>
+                      <span className="hidden sm:inline">{dateTime(s.created_at)}</span>
+                    </td>
+                    <td className="td col-opt">{s.cashier_name || '—'}</td>
+                    <td className="td col-opt text-slate-400">{s.customer_name || 'Walk-in'}</td>
                     <td className="td"><Badge kind={s.payment_method}>{PAYMENT_LABELS[s.payment_method] || s.payment_method}</Badge></td>
-                    <td className="td text-right font-semibold text-white">{ugx(s.total)}</td>
-                    <td className="td text-right text-brand-300">{ugx(s.profit)}</td>
+                    <td className="td text-right font-semibold text-white tabular-nums whitespace-nowrap">
+                      <span className="sm:hidden">{compactUgx(s.total)}</span>
+                      <span className="hidden sm:inline">{ugx(s.total)}</span>
+                    </td>
+                    <td className="td text-right text-brand-300 tabular-nums whitespace-nowrap">
+                      <span className="sm:hidden">{compactUgx(s.profit)}</span>
+                      <span className="hidden sm:inline">{ugx(s.profit)}</span>
+                      <span className="sm:hidden text-slate-600 text-xs ml-1">›</span>
+                    </td>
                   </tr>
                 ))}
               </tbody>

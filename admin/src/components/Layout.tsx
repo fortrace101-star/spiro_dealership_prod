@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { canAccess } from '../lib/access'
-import { usePush } from '../hooks/usePush'
+import { playPushChime, usePush } from '../hooks/usePush'
 import { api } from '../lib/api'
 import { ugx } from '../lib/format'
 import { Modal } from './Modal'
@@ -56,6 +56,19 @@ export default function Layout() {
   const [wiping, setWiping] = useState(false)
   const [wipeError, setWipeError] = useState('')
   const [toasts, setToasts] = useState<Toast[]>([])
+  // User gesture unlock for in-app sound: browsers block AudioContext until
+  // the user interacts. The first pointer interaction arms the chime so later
+  // push toasts can beep; closed-tab delivery still beeps via the OS.
+  const audioArmed = useRef(false)
+  useEffect(() => {
+    const arm = () => { audioArmed.current = true }
+    window.addEventListener('pointerdown', arm, { once: true })
+    window.addEventListener('keydown', arm, { once: true })
+    return () => {
+      window.removeEventListener('pointerdown', arm)
+      window.removeEventListener('keydown', arm)
+    }
+  }, [])
   const [navOpen, setNavOpen] = useState(false)
   // Sidebar attention badges: pending reorder lists + pending approvals.
   // Loaded lazily alongside the shell so every page inherits them for free;
@@ -93,7 +106,9 @@ export default function Layout() {
     return () => { cancelled = true; clearInterval(id) }
   }, [])
 
-  // In-app toast when a push arrives (e.g. a POS sale) while the dashboard is open
+  // In-app toast + chime when a push arrives (e.g. a POS sale) while the
+  // dashboard is open. The chime only plays after a user gesture has armed
+  // audio (see audioArmed) — browsers block sound before first interaction.
   useEffect(() => {
     function onMessage(e: MessageEvent) {
       const payload = e.data?.payload
@@ -101,6 +116,7 @@ export default function Layout() {
       const isSale = payload.receiptNo || payload.title?.includes('Sale')
       const t: Toast = { id: Date.now(), title: payload.title || 'Spiro', body: payload.body || '' }
       setToasts((prev) => [...prev.slice(-2), t])
+      if (audioArmed.current) playPushChime()
       if (isSale) console.log(`[sale] ${payload.receiptNo || ''} ${ugx(Number(payload.total) || 0)} via ${payload.paymentMethod || '—'}`)
       setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== t.id)), 8000)
     }
