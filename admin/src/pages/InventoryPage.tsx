@@ -100,6 +100,13 @@ export default function InventoryPage() {
         {products && <span className="text-sm text-slate-500 ml-auto">{products.length} products</span>}
       </div>
 
+      {/* Mobile-only stock status key (the Status column is sm+ only) — sits above the table */}
+      <div className="sm:hidden mb-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-400" />OK — in stock</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-orange-400" />Low — at/below reorder level</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-red-400" />Out — zero stock</span>
+      </div>
+
       <div className="card overflow-hidden">
         {products === null ? (
           <Spinner />
@@ -184,12 +191,6 @@ export default function InventoryPage() {
                 })}
               </tbody>
             </table>
-            {/* Mobile-only key: the Status column (which carries these colors) is sm+ only */}
-            <div className="sm:hidden px-4 py-3 border-t border-slate-800/60 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
-              <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-400" />OK — in stock</span>
-              <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-orange-400" />Low — at/below reorder level</span>
-              <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-red-400" />Out — zero stock</span>
-            </div>
           </div>
         )}
       </div>

@@ -3,6 +3,7 @@ import { api } from '../lib/api'
 import { dateTime, timeAgo } from '../lib/format'
 import type { ActivationCode, PosPermission, User } from '../lib/types'
 import { Badge, EmptyState, PageHeader, Spinner } from '../components/ui'
+import { cn } from '../lib/cn'
 import { Field, Modal } from './InventoryPage'
 
 /** Extra POS capabilities offered on the code form (server whitelists these too) */
@@ -18,7 +19,9 @@ export default function TeamPage() {
   const [lastCode, setLastCode] = useState<string | null>(null)
   const [lastCodePerms, setLastCodePerms] = useState<PosPermission[]>([])
   const [copied, setCopied] = useState(false)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
   const [permBusyId, setPermBusyId] = useState<string | null>(null)
+  const [staffDetail, setStaffDetail] = useState<User | null>(null)
 
   const load = useCallback(async () => {
     const [u, c] = await Promise.all([api.staff(), api.codes()])
@@ -68,11 +71,31 @@ export default function TeamPage() {
     }
   }
 
-  function copy(code: string) {
+  function copy(code: string, id?: string) {
     navigator.clipboard.writeText(code).then(() => {
       setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
+      setCopiedId(id ?? null)
+      setTimeout(() => {
+        setCopied(false)
+        setCopiedId(null)
+      }, 1500)
     })
+  }
+
+  function openStaff(u: User) {
+    setStaffDetail(u)
+  }
+
+  async function updateStaffPerms(u: User, perms: PosPermission[]) {
+    await api.updateUser(u.id, { permissions: perms })
+    setStaffDetail((prev) => (prev && prev.id === u.id ? { ...prev, permissions: perms } : prev))
+    load()
+  }
+
+  async function updateStaffActive(u: User, active: boolean) {
+    await api.updateUser(u.id, { is_active: active })
+    setStaffDetail((prev) => (prev && prev.id === u.id ? { ...prev, is_active: active } : prev))
+    load()
   }
 
   return (
@@ -113,41 +136,56 @@ export default function TeamPage() {
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full">
-              <tbody>
-                {users.map((u) => (
-                  <tr key={u.id}>
-                    <td className="td">
-                      <div className="font-medium text-white">{u.full_name}</div>
-                      <div className="text-xs text-slate-500">{u.email || 'no email'}</div>
-                    </td>
-                    <td className="td"><Badge>{u.role}</Badge></td>
-                    <td className="td text-xs text-slate-500">{u.last_login_at ? `Active ${timeAgo(u.last_login_at)}` : 'Never logged in'}</td>
-                    <td className="td">
-                      {u.role === 'admin' || u.role === 'manager' ? (
-                        <span className="text-[11px] text-slate-500">All POS capabilities</span>
-                      ) : (
-                        <button
-                          className={(u.permissions || []).includes('inventory_entry')
-                            ? 'text-[11px] px-2 py-1 rounded-md border border-sky-500/30 bg-sky-500/15 text-sky-300'
-                            : 'btn-ghost text-xs px-2 py-1'}
-                          disabled={permBusyId === u.id}
-                          onClick={() => toggleInventoryEntry(u)}
-                          title="Let this operator add products and receive stock on the POS"
-                        >
-                          {(u.permissions || []).includes('inventory_entry') ? '✓ Inventory entry' : '+ Inventory entry'}
-                        </button>
-                      )}
-                    </td>
-                    <td className="td text-right">
-                      {u.role !== 'admin' && (
-                        <button className={u.is_active ? 'btn-danger text-xs px-2 py-1' : 'btn-ghost text-xs px-2 py-1'} onClick={() => toggleUser(u)}>
-                          {u.is_active ? 'Disable' : 'Enable'}
-                        </button>
-                      )}
-                    </td>
+                <thead>
+                  <tr>
+                    <th className="th">Staff</th>
+                    <th className="th col-opt">Last seen</th>
+                    <th className="th">Privileges</th>
                   </tr>
-                ))}
-              </tbody>
+                </thead>
+                <tbody>
+                  {users.map((u) => (
+                                        <tr
+                      key={u.id}
+                      onClick={() => openStaff(u)}
+                      className={cn(
+                        'cursor-pointer transition-colors',
+                        u.role === 'admin'
+                          ? 'hover:bg-sky-950/30'
+                          : 'hover:bg-slate-800/30',
+                      )}
+                    >
+                      <td className="td">
+                        <div className="font-medium text-white">{u.full_name}</div>
+                        <div className="text-xs text-slate-500">{u.email || "no email"}</div>
+                                                                        <div className="mt-1.5">
+                          <Badge kind={u.role === 'admin' ? 'pending' : undefined}>
+                            {u.role === 'admin' ? 'Administrator' : u.role}
+                          </Badge>
+                        </div>
+                      </td>
+                      <td className="td col-opt text-xs text-slate-500">{u.last_login_at ? `Active ${timeAgo(u.last_login_at)}` : "Never logged in"}</td>
+                                            <td className="td">
+                        <div className="flex flex-wrap gap-1 items-center">
+                          {u.role === 'admin' && (
+                            <span className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-amber-500/30 bg-amber-500/15 text-amber-300">
+                              <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                              Administrator
+                            </span>
+                          )}
+                          {(u.permissions || []).includes('inventory_entry') ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-sky-500/30 bg-sky-500/15 text-sky-300">
+                              <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
+                              Inventory entry
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-slate-500">No extra POS rights</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
               </table>
             </div>
           )}
@@ -177,8 +215,8 @@ export default function TeamPage() {
                 {codes.map((c) => (
                   <tr key={c.id}>
                     <td className="td">
-                      <button className="font-mono text-xs text-brand-300 hover:underline" onClick={() => copy(c.code)} title="Click to copy">
-                        {c.code}
+                      <button className="font-mono text-xs text-brand-300 hover:underline" onClick={() => copy(c.code, c.id)} title="Click to copy">
+                        {copiedId === c.id ? '✓ Copied' : c.code}
                       </button>
                       {c.label && <div className="text-[11px] text-slate-500">{c.label}</div>}
                     </td>
@@ -250,6 +288,65 @@ export default function TeamPage() {
               <button className="btn-primary w-full sm:w-auto">Generate</button>
             </div>
           </form>
+        </Modal>
+      )}
+      {/* Staff management modal */}
+      {staffDetail && (
+                <Modal title={`Manage — ${staffDetail.full_name}`} onClose={() => setStaffDetail(null)}>
+          <div className="space-y-5">
+            {/* Staff info card */}
+            <div className="bg-[#0b0e13] border border-slate-800/60 rounded-xl p-4">
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <div className="text-xs text-slate-500 mb-1">Name</div>
+                                  <div className="text-white font-medium">{staffDetail.full_name}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500 mb-1">Email</div>
+                  <div className="text-white break-words">{staffDetail.email || '—'}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500 mb-1">Role</div>
+                  <div className="text-white">{staffDetail.role ? staffDetail.role.charAt(0).toUpperCase() + staffDetail.role.slice(1).toLowerCase() : '—'}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500 mb-1">Status</div>
+                  <div className={staffDetail.is_active ? 'text-emerald-300' : 'text-red-300'}>{staffDetail.is_active ? 'Active' : 'Inactive'}</div>
+                </div>
+              </div>
+              <div className="text-xs text-slate-600 mt-3">Last login: {staffDetail.last_login_at ? timeAgo(staffDetail.last_login_at) : 'Never'} · Created: {dateTime(staffDetail.created_at)}</div>
+            </div>
+
+            {/* Elevate rights */}
+            <div className="space-y-3">
+              <div className="text-sm font-semibold text-white">Elevate rights</div>
+              <Field label="POS inventory entry">
+                <button className="btn-ghost w-full text-xs justify-start" disabled={permBusyId === staffDetail.id} onClick={() => toggleInventoryEntry(staffDetail)}>
+                  {staffDetail.permissions?.includes('inventory_entry') ? (
+                    <span className="inline-flex items-center gap-1.5 text-sky-300">
+                      <span className="h-2 w-2 rounded-full bg-sky-400" />
+                      Granted — can enter products and adjust stock
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">Revoked — standard cashier only</span>
+                  )}
+                </button>
+              </Field>
+            </div>
+
+                        {staffDetail.role !== 'admin' && (
+              <>
+                {/* POS access */}
+                <div className="space-y-3">
+                  <div className="text-sm font-semibold text-white">POS access</div>
+                  <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+                    <button className="btn-ghost w-full sm:w-auto" disabled={permBusyId === staffDetail.id} onClick={() => updateStaffActive(staffDetail, false)}>Deactivate POS access</button>
+                    <button className="btn-primary w-full sm:w-auto" disabled={permBusyId === staffDetail.id} onClick={() => updateStaffActive(staffDetail, true)}>{staffDetail.is_active ? 'Close' : 'Reactivate'}</button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </Modal>
       )}
     </div>

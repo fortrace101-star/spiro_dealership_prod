@@ -234,8 +234,8 @@ view exists or add one (Rule 2).
 | Purchasing (item table inside the modal) | SKU, Product, Qty, Line total | Unit cost |
 | Bikes (7 cols) | ✅ done | Battery (Model/VIN + Cost/Price stack on phones, separate on PC) |
 | Reservations | ✅ done | Plan, Down (phones: Model over dot+VIN merged cell; Total/Paid/Balance stack; no Actions — rows open the detail modal on every breakpoint) |
-| Approvals (5 + action) | Type, Request, Status + actions | Requested by, When |
-| Team & codes (4 cols) | all four | Expires, only if it still overflows |
+| Approvals (6 cols) | ✅ done | Request, Status + actions (Type column removed entirely; Requested by, When hidden on phones — plus Pending/Approved/Rejected/All status filter with per-status badges) |
+| Team & codes (staff, 4 cols) | ✅ done | Expires, only if it still overflows |
 | Settings (staff, 5 cols) | Name, Revenue | Sales, Profit, Discounts |
 | Overview (low stock, 3 cols) | all three | — |
 | Overview (stock value, 5 cols) | Product, In stock, Stock value | Min, Reorder at |
@@ -294,13 +294,13 @@ developer (Rule 0).
 | Cost / Price | shown, stacked, compact (phones only) | one merged cell on phones: Cost over Price split by a thin `border-t border-slate-800/80` divider; both lines `compactUgx`, Cost muted `text-slate-400`, Price white; from `sm:` up the merged cell is replaced by separate full-width Cost and Price columns (`col-opt`) showing `ugx()` |
 | Margin | shown | percentage, `tabular-nums` |
 | Stock | shown, colored | count, `tabular-nums`, tinted with its status color (emerald / orange / red) so the status reads without the Status column; carries the `›` chevron on phones |
-| Status | `col-opt` | OK / Low / Out dot from `sm:` up only — the colors are already on the Stock cell; a mobile-only legend under the table spells out the three colors (OK — in stock, Low — at/below reorder level, Out — zero stock) |
+| Status | `col-opt` | OK / Low / Out dot from `sm:` up only — the colors are already on the Stock cell; a mobile-only key sits above the table spelling out the three colors (OK — in stock, Low — at/below reorder level, Out — zero stock) |
 | Actions | `col-opt` | Edit / History / Adjust from `sm:` up; on phones the drawer footer has Movement history / Adjust stock / Edit product, with `stopPropagation` on the cell |
 
 Display set approved by the developer (Rule 0): **Product, Cost/Price (merged on
 phones only), Margin, Stock** visible on mobile; Category, Status and Actions
-hidden (`col-opt`). Stock carries the status color on mobile, with a legend row
-under the table; from `sm:` up the table shows separate Cost, Price and Status
+hidden (`col-opt`). Stock carries the status color on mobile, with a key above
+the table; from `sm:` up the table shows separate Cost, Price and Status
 columns. A product detail drawer was added in this pass (Rule 2) showing every
 hidden column plus brand, supplier, stock value, min stock, reorder level,
 status and last-updated. Pagination added with `usePageSize()` (10 mobile /

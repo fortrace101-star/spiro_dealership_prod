@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api'
 import { dateTime, ugx } from '../lib/format'
 import type { Approval } from '../lib/types'
+import { usePageSize } from '../lib/usePageSize'
 import { EmptyState, PageHeader, Spinner } from '../components/ui'
 import { Modal } from '../components/Modal'
 
 type Category = 'all' | 'credit' | 'reservation_release'
+type StatusFilter = 'pending' | 'approved' | 'rejected'
 
 const CATEGORY_LABEL: Record<Category, string> = {
   all: 'All',
@@ -16,6 +18,12 @@ const CATEGORY_LABEL: Record<Category, string> = {
 function categoryOf(a: Approval): Exclude<Category, 'all'> {
   return a.type === 'reservation_release' ? 'reservation_release' : 'credit'
 }
+
+const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
+  { key: 'pending', label: 'Pending' },
+  { key: 'approved', label: 'Approved' },
+  { key: 'rejected', label: 'Rejected' },
+]
 
 function statusPill(status: string) {
   const styles: Record<string, string> = {
@@ -55,12 +63,17 @@ function detailRows(a: Approval): [string, string][] {
 }
 
 export default function ApprovalsPage() {
-  const [category, setCategory] = useState<Category>('all')
+  const [category, setCategory] = useState<Category>('credit')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending')
+
   const [approvals, setApprovals] = useState<Approval[] | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [detail, setDetail] = useState<Approval | null>(null)
-  const [error, setError] = useState('')
+    const [error, setError] = useState('')
+
+  const [page, setPage] = useState(1)
+  const pageSize = usePageSize()
 
   const load = useCallback(async () => {
     const r = await api.approvals('all')
@@ -68,8 +81,9 @@ export default function ApprovalsPage() {
   }, [])
 
   useEffect(() => {
+    setPage(1)
     load().catch(() => setApprovals([]))
-  }, [load])
+  }, [load, category, statusFilter])
 
   async function decide(id: string, decision: 'approved' | 'rejected') {
     setBusyId(id)
@@ -89,15 +103,36 @@ export default function ApprovalsPage() {
   /** Pending counts per category — power the badges on the category buttons. */
   const pending = useMemo(() => (approvals || []).filter((a) => a.status === 'pending'), [approvals])
   const counts = useMemo(() => {
-    const c = { all: pending.length, credit: 0, reservation_release: 0 }
+        const c: Record<Exclude<Category, 'all'>, number> = { credit: 0, reservation_release: 0 }
     for (const a of pending) c[categoryOf(a)] += 1
     return c
   }, [pending])
 
+  /** Per-status counts within the current category — one badge per status button. */
+  const statusCounts = useMemo(() => {
+    const c: Record<StatusFilter, number> = { pending: 0, approved: 0, rejected: 0 }
+    for (const a of approvals || []) {
+      if (categoryOf(a) !== category) continue
+      if (a.status === 'pending') c.pending += 1
+      else if (a.status === 'approved') c.approved += 1
+      else if (a.status === 'rejected') c.rejected += 1
+    }
+    return c
+  }, [approvals, category])
+
   const shown = useMemo(
-    () => (approvals || []).filter((a) => category === 'all' || categoryOf(a) === category),
-    [approvals, category],
+    () =>
+      (approvals || []).filter(
+        (a) => categoryOf(a) === category && a.status === statusFilter,
+      ),
+    [approvals, category, statusFilter],
   )
+
+  const totalPages = Math.max(1, Math.ceil(shown.length / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const pageItems = shown.slice((safePage - 1) * pageSize, safePage * pageSize)
+  const rangeFrom = shown.length === 0 ? 0 : (safePage - 1) * pageSize + 1
+  const rangeTo = Math.min(safePage * pageSize, shown.length)
 
   function payloadText(a: Approval): string {
     const p = a.payload || {}
@@ -112,8 +147,7 @@ export default function ApprovalsPage() {
     return bits.join(' · ') || JSON.stringify(p)
   }
 
-  const categories: { key: Category; badge: number }[] = [
-    { key: 'all', badge: counts.all },
+    const categories: { key: Category; badge: number }[] = [
     { key: 'credit', badge: counts.credit },
     { key: 'reservation_release', badge: counts.reservation_release },
   ]
@@ -141,47 +175,61 @@ export default function ApprovalsPage() {
         ))}
       </div>
 
+      {/* Status filter — applies to whichever category is selected */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        {STATUS_FILTERS.map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => setStatusFilter(key)}
+            className={(statusFilter === key ? 'btn-primary' : 'btn-ghost') + ' text-xs relative'}
+          >
+            {label}
+            {key === 'pending' && statusCounts.pending > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 flex items-center justify-center text-[9px] font-bold text-white rounded-full ring-1 ring-slate-900 bg-amber-500 ring-amber-900">
+                {statusCounts.pending > 99 ? '99+' : statusCounts.pending}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
       <div className="card overflow-hidden relative">
         {approvals === null ? (
           <Spinner />
         ) : shown.length === 0 ? (
-          <EmptyState message={category === 'all' ? 'No approvals yet.' : `No ${CATEGORY_LABEL[category]} approvals.`} />
+                              <EmptyState message={`No ${statusFilter} ${CATEGORY_LABEL[category]} approvals.`} />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr>
-                  <th className="th">Type</th>
                   <th className="th">Request</th>
-                  <th className="th">Requested by</th>
-                  <th className="th">When</th>
+                  <th className="th col-opt">Requested by</th>
+                  <th className="th col-opt">When</th>
                   <th className="th">Status</th>
-                  <th className="th"></th>
+                  <th className="th text-right">⋮</th>
                 </tr>
               </thead>
             <tbody>
-              {shown.map((a) => (
+              {pageItems.map((a) => (
                 <tr
                   key={a.id}
-                  className="cursor-pointer hover:bg-slate-800/50 transition-colors"
+                  className={'cursor-pointer hover:bg-slate-800/50 transition-colors' + (a.status === 'pending' ? ' bg-orange-500/10' : '')}
                   onClick={() => setDetail(a)}
                 >
-                  <td className="td">
-                    <span className="text-xs font-medium text-slate-300">{CATEGORY_LABEL[categoryOf(a)]}</span>
-                  </td>
                   <td className="td text-slate-300">{payloadText(a)}</td>
-                  <td className="td text-slate-400">{a.requested_by_name || '—'}</td>
-                  <td className="td text-xs text-slate-500">{dateTime(a.created_at)}</td>
-                  <td className="td">{statusPill(a.status)}</td>
-                  <td className="td text-right relative whitespace-nowrap">
+                  <td className="td col-opt text-slate-400">{a.requested_by_name || '—'}</td>
+                  <td className="td col-opt text-xs text-slate-500">{dateTime(a.created_at)}</td>
+                  <td className="td whitespace-nowrap">
+                    {statusPill(a.status)}
+                    <span className="sm:hidden text-slate-600 ml-2 text-xs">›</span>
+                  </td>
+                  <td className="td text-right relative whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                     <button
                       className="p-1.5 rounded-md hover:bg-slate-700/60 text-slate-400 hover:text-slate-200"
                       disabled={busyId === a.id}
                       title="Actions"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setMenuFor(menuFor === a.id ? null : a.id)
-                      }}
+                      onClick={() => setMenuFor(menuFor === a.id ? null : a.id)}
                     >
                       ⋮
                     </button>
@@ -209,11 +257,23 @@ export default function ApprovalsPage() {
                   </td>
                 </tr>
               ))}
-              </tbody>
+                            </tbody>
             </table>
           </div>
         )}
       </div>
+
+      {/* Pagination — outside the card so it sits below it */}
+      {approvals && shown.length > 0 && (
+        <div className="flex items-center justify-between mt-3 text-sm">
+          <span className="text-slate-500">Showing {rangeFrom}–{rangeTo} of {shown.length}</span>
+          <div className="flex items-center gap-2">
+            <button className="btn-ghost text-xs" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>← Prev</button>
+            <span className="text-slate-400 text-xs">Page {safePage} of {totalPages}</span>
+            <button className="btn-ghost text-xs" disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}>Next →</button>
+          </div>
+        </div>
+      )}
 
       {/* Detail dialog — full transaction context, with Approve / Reject actions */}
       {detail && (
