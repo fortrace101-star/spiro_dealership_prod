@@ -70,6 +70,19 @@ export function Badge({ kind, children }: { kind?: string; children: ReactNode }
   return <span className={cn('inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-medium capitalize', cls)}>{children}</span>
 }
 
+/**
+ * Card tint + text color that exactly match how `Badge` renders the same
+ * `kind` on a table — use it for detail-drawer sections so a status reads
+ * the same everywhere (background/border on the card, text color on the value).
+ */
+export function badgeTint(kind?: string): { card: string; text: string } {
+  const cls = (kind && BADGE_COLORS[kind]) || 'bg-slate-500/15 text-slate-300 border-slate-500/20'
+  const parts = cls.split(' ')
+  const text = parts.find((c) => c.startsWith('text-')) || 'text-slate-300'
+  const card = parts.filter((c) => !c.startsWith('text-')).join(' ')
+  return { card, text }
+}
+
 /** Status of a product's stock: OK (in stock) / Low (at or below reorder level) / Out (zero). */
 export type StockStatus = 'ok' | 'low' | 'out'
 

@@ -273,7 +273,7 @@ place (`usePageSize()`, 10 mobile / 20 PC) before this conversion.
 
 | Column | Mobile | Notes |
 |---|---|---|
-| Model + VIN | shown, stacked | primary cell — Model over the `VIN : <vin>` subline (breakpoint split: `sm:hidden` stacked cell, `col-opt` separate VIN/Model columns on PC) |
+| Model + VIN | shown, stacked | primary cell — Model over the bare `<vin>` subline (breakpoint split: `sm:hidden` stacked cell, `col-opt` separate VIN/Model columns on PC) |
 | Battery | `col-opt` | in the drawer as Battery serial / Battery spec cards |
 | Cost / Price | shown, stacked, compact | merged cell on phones (Cost over a thin hr over Price, colors kept, `compactUgx`); separate Cost and Price columns on PC with full `ugx` |
 | Status | shown | `Badge` unchanged; last-cell `›` chevron lives in Customer |

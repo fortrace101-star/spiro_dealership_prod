@@ -3,7 +3,7 @@ import { api } from '../lib/api'
 import { cn } from '../lib/cn'
 import { compactUgx, dateTime, num, ugx } from '../lib/format'
 import type { Bike, BikeReservation, VinLookupResult } from '../lib/types'
-import { Badge, EmptyState, PageHeader, Spinner } from '../components/ui'
+import { Badge, badgeTint, EmptyState, PageHeader, Spinner } from '../components/ui'
 import { Field, Modal } from './InventoryPage'
 import { useIsPhone } from '../lib/usePageSize'
 import { ReservationDetailModal, ReserveBikeModal, ReservationsTabContent } from './ReservationModals'
@@ -238,10 +238,10 @@ export default function BikesPage() {
                   const price = b.status === 'sold' ? b.sold_price ?? b.selling_price : b.selling_price
                   return (
                     <tr key={b.id} className="hover:bg-slate-800/30 cursor-pointer" onClick={() => setDetailBike(b)}>
-                      {/* Phones: Model over the VIN subline (prefixed "VIN :"); sm+: separate VIN / Model columns */}
+                      {/* Phones: Model over the bare VIN subline; sm+: separate VIN / Model columns */}
                       <td className="td sm:hidden">
                         <div className="font-medium text-white">{b.model}{b.color && <span className="text-slate-500 text-xs"> · {b.color}</span>}{b.year ? ` · ${b.year}` : ''}</div>
-                        <div className="text-[11px] font-mono text-brand-300">VIN : {b.vin}</div>
+                        <div className="text-[11px] font-mono text-brand-300">{b.vin}</div>
                       </td>
                       <td className="td col-opt font-mono text-xs text-brand-300">{b.vin}</td>
                       <td className="td col-opt sm:text-[13px]">{b.model}{b.color && <span className="text-slate-500 text-xs"> · {b.color}</span>}{b.year ? ` · ${b.year}` : ''}</td>
@@ -298,9 +298,10 @@ export default function BikesPage() {
                 <div className="text-xs text-slate-500 mb-1">Sell price</div>
                 <div className="text-base font-semibold text-white">{ugx(detailBike.status === 'sold' ? detailBike.sold_price ?? detailBike.selling_price : detailBike.selling_price)}</div>
               </div>
-              <div className="bg-[#0b0e13] border border-slate-800/60 rounded-xl p-3">
+              {/* Status card mirrors the table Badge: status-colored tinted background + value text */}
+              <div className={cn('border rounded-xl p-3', badgeTint(detailBike.status).card)}>
                 <div className="text-xs text-slate-500 mb-1">Status</div>
-                <div className="text-base font-semibold text-white capitalize">{detailBike.status.replace('_', ' ')}</div>
+                <div className={cn('text-base font-semibold capitalize', badgeTint(detailBike.status).text)}>{detailBike.status.replace('_', ' ')}</div>
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm mb-6">
