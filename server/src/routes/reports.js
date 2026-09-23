@@ -102,7 +102,7 @@ router.get('/today/hourly', async (req, res) => {
     `SELECT EXTRACT(HOUR FROM created_at AT TIME ZONE 'Africa/Kampala')::int AS hour,
             COALESCE(sum(total),0) AS revenue, COALESCE(sum(profit),0) AS profit
        FROM sales
-      WHERE created_at >= (date_trunc('day', now() AT TIME ZONE 'Africa/Kampala') AT TIME ZONE 'UTC')
+      WHERE created_at >= (date_trunc('day', now() AT TIME ZONE 'Africa/Kampala') AT TIME ZONE 'Africa/Kampala')
       GROUP BY hour ORDER BY hour`
   );
   const nowHour = (new Date().getUTCHours() + 3) % 24;

@@ -319,7 +319,7 @@ export default function POSScreen() {
                       <div className="text-sm font-semibold text-white mt-0.5 leading-snug line-clamp-2">{p.name}</div>
                       <div className="flex items-end justify-between mt-2">
                         <span className="text-brand-300 font-bold text-sm">{ugx(p.selling_price)}</span>
-                        {/* Worded stock level, as before: amber at/below reorder level, slate otherwise. */}
+                        {/* Worded stock level: red Out / amber at-below reorder level, slate otherwise. */}
                         <span
                           title={out ? 'Out of stock' : `${p.stock_qty} in stock${p.stock_qty <= p.reorder_level ? ' (low)' : ''}`}
                           className={cn(

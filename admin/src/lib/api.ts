@@ -157,7 +157,7 @@ export const api = {
       { method: 'POST', body: JSON.stringify(payment) },
     ),
   completeReservation: (id: string) => request<{ reservation: BikeReservation }>(`/api/admin/reservations/${id}/complete`, { method: 'POST' }),
-  releaseReservation: (id: string, payload: { note?: string } = {}) =>
+  releaseReservation: (id: string, payload: { note?: string; password?: string } = {}) =>
     request<{ reservation: BikeReservation }>(`/api/admin/reservations/${id}/release`, { method: 'POST', body: JSON.stringify(payload) }),
 
   // shared purchasing — admins and managers can prepare and review stock requests

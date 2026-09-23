@@ -6,9 +6,16 @@ export function ugx(v: string | number | null | undefined): string {
 
 export function compactUgx(v: string | number | null | undefined): string {
   const n = Number(v || 0)
-  if (Math.abs(n) >= 1_000_000) return `UGX ${(n / 1_000_000).toFixed(1)}M`
-  if (Math.abs(n) >= 1_000) return `UGX ${(n / 1_000).toFixed(0)}K`
+  // Round to the nearest 100 first, then K/M with trailing zeros trimmed:
+  // 1,500 → 1.5K · 68,500 → 68.5K · 1,575,500 → 1.5755M · 2,000,000 → 2M
+  if (Math.abs(n) >= 1_000_000) return `UGX ${trim((Math.round(n / 100) * 100) / 1_000_000)}M`
+  if (Math.abs(n) >= 1_000) return `UGX ${trim((Math.round(n / 100) * 100) / 1_000)}K`
   return `UGX ${n}`
+}
+
+/** Strip float dust and trailing zeros: 1.5755 → "1.5755", 2 → "2", 68.5 → "68.5". */
+function trim(x: number): string {
+  return String(Number(x.toFixed(4)))
 }
 
 export function num(v: string | number | null | undefined): string {

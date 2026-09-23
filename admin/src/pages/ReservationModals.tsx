@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useIsPhone } from '../lib/usePageSize'
 import { api } from '../lib/api'
 import { cn } from '../lib/cn'
-import { dateTime, num, PAYMENT_LABELS, ugx } from '../lib/format'
+import { dateShort, dateTime, num, PAYMENT_LABELS, timeShort, ugx } from '../lib/format'
 import type { Bike, BikeReservation, Customer } from '../lib/types'
 import { Badge, EmptyState, Spinner } from '../components/ui'
 import { Field, Modal } from './InventoryPage'
@@ -88,6 +88,14 @@ export function ReservationsTabContent({
         + Reserve bike
       </button>
 
+      {/* Color key for the mobile status dots (PC shows the Badge instead) — sits above the table */}
+      <div className="sm:hidden mb-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-400" />Active</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-400" />Completed</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-slate-400" />Released</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-red-400" />Expired</span>
+      </div>
+
       <div className="card overflow-hidden">
         {reservations === null ? (
           <Spinner />
@@ -98,16 +106,27 @@ export function ReservationsTabContent({
             <table className="w-full">
               <thead>
                 <tr>
-                  <th className="th">Status</th>
-                  <th className="th">Bike</th>
+                  {/* Phones: Model over (dot + VIN) as one cell; sm+: separate Status and Bike columns */}
+                  <th className="th sm:hidden">Bike</th>
+                  <th className="th col-opt">Status</th>
+                  <th className="th col-opt">Bike</th>
                   <th className="th">Customer</th>
                   <th className="th">Reserved</th>
-                  <th className="th text-right">Plan</th>
-                  <th className="th text-right">Total</th>
-                  <th className="th text-right">Down</th>
-                  <th className="th text-right">Balance</th>
-                  <th className="th text-right">Paid</th>
-                  <th className="th">Actions</th>
+                  {/* Phones: one stacked Paid/Total/Balance cell; sm+: separate columns */}
+                  <th className="th text-right sm:hidden">
+                    <div>Total</div>
+                    <div className="border-t border-slate-800/80 my-1" />
+                    <div className="text-emerald-300">Paid</div>
+                    <div className="border-t border-slate-800/80 my-1" />
+                    {/* Balance label mirrors the entries: red while outstanding, emerald once settled */}
+                    <div className={reservations?.some((r) => Number(r.balance) > 0) ? 'text-red-300' : 'text-emerald-400'}>Balance</div>
+                  </th>
+                  <th className="th col-opt text-right">Plan</th>
+                  <th className="th col-opt text-right">Total</th>
+                  <th className="th col-opt text-right">Down</th>
+                  <th className="th col-opt text-right">Balance</th>
+                  <th className="th col-opt text-right">Paid</th>
+                  {/* No Actions column: rows are clickable and open the detail modal */}
                 </tr>
               </thead>
               <tbody>
@@ -116,34 +135,54 @@ export function ReservationsTabContent({
                   const balance = r.balance
                   const outstanding = balance > 0
                   return (
-                    <tr key={r.id} className="hover:bg-slate-800/30 align-top">
-                      <td className="td">
+                    <tr key={r.id} className="hover:bg-slate-800/30 align-top cursor-pointer" onClick={() => onOpenDetail(r.id)}>
+                      {/* Phones: Model over (status dot + VIN) — same stack as the modal's Bike field */}
+                      <td className="td text-xs sm:hidden">
+                        {r.bike?.model && <div className="font-medium text-white">{r.bike.model}</div>}
+                        <div className="flex items-center gap-1.5 whitespace-nowrap">
+                          <span className={cn('inline-block h-2 w-2 rounded-full shrink-0', STATUS_DOT[r.status] || 'bg-slate-400')} title={r.status} />
+                          <span className="font-mono text-brand-300">{r.bike?.vin || `${r.bike_id.slice(0, 8)}…`}</span>
+                        </div>
+                      </td>
+                      <td className="td col-opt text-xs whitespace-nowrap">
                         <Badge kind={r.status}>{r.status}</Badge>
                       </td>
-                      <td className="td font-mono text-xs text-brand-300 break-all">
-                        {r.bike?.vin || `${r.bike_id.slice(0, 8)}…`}
+                      {/* sm+ up: Model over VIN, same stack as the modal's Bike field (Status badge is its own column) */}
+                      <td className="td col-opt text-xs">
+                        {r.bike?.model && <div className="font-medium text-white">{r.bike.model}</div>}
+                        <div className="font-mono text-brand-300 break-all">{r.bike?.vin || `${r.bike_id.slice(0, 8)}…`}</div>
                       </td>
-                      <td className="td text-slate-300">
+                      <td className="td text-xs text-slate-300">
                         {r.customer?.full_name || '—'}
-                        {r.customer?.phone && <span className="block text-slate-500 text-xs">{r.customer.phone}</span>}
+                        {r.customer?.phone && <span className="block text-slate-500 text-[11px]">{r.customer.phone}</span>}
                       </td>
-                      <td className="td text-slate-400">{dateTime(r.reserved_at)}</td>
-                      <td className="td text-right tabular-nums">
+                      {/* Phones: date over time ("22 Sep" / "22:10"); sm+: full dateTime */}
+                      <td className="td text-xs text-slate-400 whitespace-nowrap">
+                        <span className="sm:hidden block">{dateShort(r.reserved_at)}</span>
+                        <span className="sm:hidden block">{timeShort(r.reserved_at)}</span>
+                        <span className="hidden sm:inline">{dateTime(r.reserved_at)}</span>
+                      </td>
+                      {/* Phones: Total over Paid, then Balance as the next row (same stack as Inventory Cost/Price) */}
+                      <td className="td text-xs text-right tabular-nums whitespace-nowrap sm:hidden">
+                        <div>{ugx(r.total_price)}</div>
+                        <div className="border-t border-slate-800/80 my-1" />
+                        <div className="text-emerald-300">{ugx(paid)}</div>
+                        <div className="border-t border-slate-800/80 my-1" />
+                        <div className={cn('font-semibold', outstanding ? 'text-red-300' : 'text-emerald-400')}>
+                          {ugx(balance)}
+                        </div>
+                      </td>
+                      <td className="td col-opt text-xs text-right tabular-nums whitespace-nowrap">
                         {r.plan_months ? `${num(r.plan_months)} mo` : '—'}
                       </td>
-                      <td className="td text-right tabular-nums">{ugx(r.total_price)}</td>
-                      <td className="td text-right tabular-nums">{ugx(r.down_payment)}</td>
-                      <td className="td text-right tabular-nums">
+                      <td className="td col-opt text-xs text-right tabular-nums whitespace-nowrap">{ugx(r.total_price)}</td>
+                      <td className="td col-opt text-xs text-right tabular-nums whitespace-nowrap">{ugx(r.down_payment)}</td>
+                      <td className="td col-opt text-xs text-right tabular-nums whitespace-nowrap">
                         <span className={cn('font-semibold', outstanding ? 'text-red-300' : 'text-emerald-400')}>
                           {ugx(balance)}
                         </span>
                       </td>
-                      <td className="td text-right tabular-nums">{ugx(paid)}</td>
-                      <td className="td">
-                        <button className="btn-ghost btn-sm" onClick={() => onOpenDetail(r.id)}>
-                          Details
-                        </button>
-                      </td>
+                      <td className="td col-opt text-xs text-right tabular-nums whitespace-nowrap">{ugx(paid)}</td>
                     </tr>
                   )
                 })}
@@ -154,6 +193,14 @@ export function ReservationsTabContent({
       </div>
     </div>
   )
+}
+
+/** Dot fill per reservation status — mirrors BADGE_COLORS in ui.tsx (phones only). */
+const STATUS_DOT: Record<string, string> = {
+  active: 'bg-amber-400',
+  completed: 'bg-emerald-400',
+  released: 'bg-slate-400',
+  expired: 'bg-red-400',
 }
 
 function Summary({ label, value }: { label: string; value: string }) {
@@ -396,6 +443,10 @@ export function ReservationDetailModal({
   const [payForm, setPayForm] = useState({ amount: '', payment_method: 'cash', transaction_ref: '', note: '' })
   const [payBusy, setPayBusy] = useState(false)
   const [actionBusy, setActionBusy] = useState<string | null>(null)
+  const [releaseOpen, setReleaseOpen] = useState(false)
+  const [releaseNote, setReleaseNote] = useState('')
+  const [releasePassword, setReleasePassword] = useState('')
+  const [releaseErr, setReleaseErr] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -452,22 +503,36 @@ export function ReservationDetailModal({
     setActionBusy(null)
   }
 
-  async function release() {
-    const reason = window.prompt('Why is this reservation being released? (optional)')
-    if (reason === null) return
+  /** Opens the release confirmation — the password check gates the actual action. */
+  function openRelease() {
+    setReleaseErr('')
+    setReleasePassword('')
+    setReleaseNote('')
+    setReleaseOpen(true)
+  }
+
+  async function submitRelease(e: React.FormEvent) {
+    e.preventDefault()
+    setReleaseErr('')
+    if (!releasePassword) {
+      setReleaseErr('Enter your password to verify your identity')
+      return
+    }
     setActionBusy('release')
     try {
-      await api.releaseReservation(id, { note: reason || undefined })
+      await api.releaseReservation(id, { note: releaseNote.trim() || undefined, password: releasePassword })
+      setReleaseOpen(false)
+      setReleasePassword('')
       await load()
       onUpdated()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Release failed')
+      setReleaseErr(err instanceof Error ? err.message : 'Release failed')
     }
     setActionBusy(null)
   }
 
   const title = reservation
-    ? `Reservation — ${reservation.bike?.model || 'Bike'} · ${reservation.bike?.vin || ''}`
+    ? `Reservation — ${reservation.bike?.model || 'Bike'}`
         : `Reservation — ${id.slice(0, 8)}…`
 
   return (
@@ -479,9 +544,15 @@ export function ReservationDetailModal({
       ) : (
         <div className="space-y-4">
           <div>
+            {/* Bike field: model above the VIN */}
+            <div className="bg-[#0b0e13] border border-slate-800/60 rounded-xl px-3 py-2 mb-3">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500">Bike</div>
+              <div className="text-sm font-medium text-white">{reservation.bike?.model || 'Bike'}</div>
+              <div className="text-xs font-mono text-brand-300 break-all">{reservation.bike?.vin || '—'}</div>
+            </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               <Summary label="Total price" value={ugx(reservation.total_price)} />
-              <Summary label="Down payment" value={ugx(reservation.down_payment)} />
+              <Summary label="Paid Amount" value={ugx(payments.reduce((s, p) => s + Number(p.amount), 0))} />
               <Summary label="Balance" value={ugx(reservation.balance)} />
               <Summary label="Plan" value={reservation.plan_months ? `${num(reservation.plan_months)} months` : '—'} />
             </div>
@@ -534,11 +605,11 @@ export function ReservationDetailModal({
                   <tbody>
                     {payments.map((p) => (
                       <tr key={p.id}>
-                        <td className="td text-slate-400">{dateTime(p.created_at)}</td>
-                        <td className="td">{PAYMENT_LABELS[p.payment_method] || p.payment_method}</td>
-                        <td className="td text-right tabular-nums">{ugx(p.amount)}</td>
-                        <td className="td text-slate-400">{p.paid_by_name || '—'}</td>
-                        <td className="td text-slate-500 font-mono text-xs">{p.transaction_ref || '—'}</td>
+                        <td className="td text-xs text-slate-400 whitespace-nowrap">{dateTime(p.created_at)}</td>
+                        <td className="td text-xs whitespace-nowrap">{PAYMENT_LABELS[p.payment_method] || p.payment_method}</td>
+                        <td className="td text-xs text-right tabular-nums whitespace-nowrap">{ugx(p.amount)}</td>
+                        <td className="td text-xs text-slate-400">{p.paid_by_name || '—'}</td>
+                        <td className="td text-xs text-slate-500 font-mono">{p.transaction_ref || '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -564,12 +635,17 @@ export function ReservationDetailModal({
                 <Field label="Reference">
                   <input className="input" value={payForm.transaction_ref} onChange={(e) => setPayForm((p) => ({ ...p, transaction_ref: e.target.value }))} placeholder="Receipt / ref no." />
                 </Field>
-                <div className="sm:col-span-2 flex items-center justify-between">
+                <div className="sm:col-span-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <span className="text-xs text-slate-500">
-                    Outstanding: <span className="text-white font-semibold">{ugx(balance)}</span> · paid:{' '}
-                    <span className="text-emerald-300">{ugx(paid)}</span>
+                    <span className="block sm:inline">
+                      Outstanding: <span className="text-white font-semibold">{ugx(balance)}</span>
+                    </span>
+                    <span className="hidden sm:inline sm:mx-1">·</span>
+                    <span className="block sm:inline">
+                      Paid: <span className="text-emerald-300">{ugx(paid)}</span>
+                    </span>
                   </span>
-                  <button className="btn-primary" disabled={payBusy}>{payBusy ? 'Saving…' : 'Save payment'}</button>
+                  <button className="btn-primary w-full sm:w-auto" disabled={payBusy}>{payBusy ? 'Saving…' : 'Save payment'}</button>
                 </div>
               </form>
             </div>
@@ -585,13 +661,41 @@ export function ReservationDetailModal({
                     {actionBusy === 'complete' ? 'Completing…' : 'Mark as complete (bought)'}
                   </button>
                 )}
-                <button className="btn-danger w-full sm:w-auto" disabled={actionBusy === 'release'} onClick={release}>
+                <button className="btn-danger w-full sm:w-auto" disabled={actionBusy === 'release'} onClick={openRelease}>
                   {actionBusy === 'release' ? 'Releasing…' : 'Release reservation'}
                 </button>
               </>
             )}
             <button className="btn-ghost w-full sm:w-auto" onClick={onClose}>Close</button>
           </div>
+        </div>
+      )}
+
+      {/* Release confirmation — password must verify identity before the action proceeds */}
+      {releaseOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={() => actionBusy !== 'release' && setReleaseOpen(false)}>
+          <div className="absolute inset-0 bg-black/60" />
+          <form onSubmit={submitRelease} className="relative card w-full max-w-sm p-4" onClick={(e) => e.stopPropagation()}>
+            <div className="text-sm font-semibold text-white mb-1">Release this reservation?</div>
+            <p className="text-xs text-slate-500 mb-3">
+              The bike returns to stock. Enter your password to verify your identity before the action proceeds.
+            </p>
+            <div className="space-y-3">
+              <Field label="Reason (optional)">
+                <input className="input" value={releaseNote} onChange={(e) => setReleaseNote(e.target.value)} placeholder="Why is it being released?" />
+              </Field>
+              <Field label="Your password *">
+                <input className="input" type="password" value={releasePassword} onChange={(e) => setReleasePassword(e.target.value)} required autoFocus />
+              </Field>
+            </div>
+            {releaseErr && <p className="text-xs text-red-400 mt-2">{releaseErr}</p>}
+            <div className="flex flex-col-reverse gap-2 pt-3 sm:flex-row sm:justify-end">
+              <button type="button" className="btn-ghost w-full sm:w-auto" disabled={actionBusy === 'release'} onClick={() => setReleaseOpen(false)}>Cancel</button>
+              <button className="btn-danger w-full sm:w-auto" disabled={actionBusy === 'release'}>
+                {actionBusy === 'release' ? 'Verifying…' : 'Confirm release'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </Modal>

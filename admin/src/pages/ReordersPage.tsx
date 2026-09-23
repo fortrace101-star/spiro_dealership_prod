@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api'
 import { compactUgx, dateTime, num, timeAgo, ugx } from '../lib/format'
 import type { Product, PurchasingRecord } from '../lib/types'
-import { EmptyState, PageHeader, Spinner } from '../components/ui'
+import { EmptyState, PageHeader, Spinner, StockChip } from '../components/ui'
 import { Field, Modal } from './InventoryPage'
 import ReceiveStockModal from '../components/ReceiveStockModal'
 import { printHtml, escapeHtml } from '../lib/print'
@@ -527,8 +527,14 @@ function ReorderForm({ products, onClose, onSaved }: { products: Product[]; onCl
           {matches.length === 0 && <div className="text-xs text-slate-600 text-center py-3">No products match.</div>}
           {matches.map((p) => (
             <button key={p.id} type="button" onClick={() => add(p)} className="w-full text-left px-2.5 py-2 rounded-lg border border-slate-800 hover:border-brand-500/50 transition">
-              <div className="text-sm text-white truncate">{p.name}</div>
-              <div className="text-[11px] text-slate-500 font-mono">{p.sku} · {num(p.stock_qty)} in stock · lvl {num(p.reorder_level)}</div>
+              <div className="flex items-end justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-sm text-white truncate">{p.name}</div>
+                  <div className="text-[11px] text-slate-500 font-mono truncate">{p.sku} · {num(p.stock_qty)} in stock · lvl {num(p.reorder_level)}</div>
+                </div>
+                {/* Filled status chip, bottom-right */}
+                <StockChip stockQty={p.stock_qty} reorderLevel={p.reorder_level} />
+              </div>
             </button>
           ))}
         </div>

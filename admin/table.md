@@ -111,6 +111,12 @@ mobile, the full form from `sm:` up. Only one is in the layout at a time.
 Helpers live in `src/lib/format.ts`: `ugx`, `compactUgx`, `num`, `dateTime`,
 `dateOnly`, `timeAgo`. Add a compact helper there rather than inlining logic.
 
+`compactUgx` rounds to the **nearest 100** before applying the K/M suffix, and
+trims trailing zeros — so compact values stay faithful instead of drifting:
+`1,500 → UGX 1.5K`, `68,500 → UGX 68.5K`, `89,500 → UGX 89.5K`,
+`1,575,500 → UGX 1.5755M`, `2,000,000 → UGX 2M`, `300 → UGX 300`.
+Admin and POS share these rules (their `format.ts` files are identical).
+
 ### Rule 4 — One primary cell, one muted subline
 
 The identifying cell carries `font-medium text-white`; any secondary line inside
@@ -227,6 +233,7 @@ view exists or add one (Rule 2).
 | Sales (items sub-table) | all — already fits | — |
 | Purchasing (item table inside the modal) | SKU, Product, Qty, Line total | Unit cost |
 | Bikes (7 cols) | ✅ done | Battery (Model/VIN + Cost/Price stack on phones, separate on PC) |
+| Reservations | ✅ done | Plan, Down (phones: Model over dot+VIN merged cell; Total/Paid/Balance stack; no Actions — rows open the detail modal on every breakpoint) |
 | Approvals (5 + action) | Type, Request, Status + actions | Requested by, When |
 | Team & codes (4 cols) | all four | Expires, only if it still overflows |
 | Settings (staff, 5 cols) | Name, Revenue | Sales, Profit, Discounts |
@@ -266,7 +273,7 @@ place (`usePageSize()`, 10 mobile / 20 PC) before this conversion.
 
 | Column | Mobile | Notes |
 |---|---|---|
-| Model + VIN | shown, stacked | primary cell — Model over the bare VIN subline (breakpoint split: `sm:hidden` stacked cell, `col-opt` separate VIN/Model columns on PC) |
+| Model + VIN | shown, stacked | primary cell — Model over the `VIN : <vin>` subline (breakpoint split: `sm:hidden` stacked cell, `col-opt` separate VIN/Model columns on PC) |
 | Battery | `col-opt` | in the drawer as Battery serial / Battery spec cards |
 | Cost / Price | shown, stacked, compact | merged cell on phones (Cost over a thin hr over Price, colors kept, `compactUgx`); separate Cost and Price columns on PC with full `ugx` |
 | Status | shown | `Badge` unchanged; last-cell `›` chevron lives in Customer |
@@ -298,6 +305,29 @@ columns. A product detail drawer was added in this pass (Rule 2) showing every
 hidden column plus brand, supplier, stock value, min stock, reorder level,
 status and last-updated. Pagination added with `usePageSize()` (10 mobile /
 20 PC); page resets to 1 on filter change.
+
+---
+
+### Reservations — approved display set
+
+**File:** `src/pages/ReservationModals.tsx`
+
+| Column | Mobile | Notes |
+|---|---|---|
+| Status + Bike | one merged cell | **Model over (status dot + VIN)** — same stack as the modal's Bike field (`STATUS_DOT` mirrors `BADGE_COLORS`), model `font-medium text-white`, VIN `font-mono text-brand-300` with `whitespace-nowrap`; color key row sits **above** the table, `sm:hidden`. From `sm:` up: separate Status (`Badge`) and Bike (Model over VIN) columns |
+| Bike | merged with Status on phones | Model over VIN stack in both layouts — own `col-opt` column from `sm:` up (Status badge stays separate there) |
+| Customer | shown | name + phone subline `text-[11px]` |
+| Reserved | shown | `dateTime`, `whitespace-nowrap` |
+| Paid / Total / Balance | one stacked cell | Total (default) on top, Paid (`text-emerald-300`) below it, Balance (red outstanding / emerald clear) last — same thin-hr stack as Inventory Cost/Price |
+| Plan | `col-opt` | in the detail modal's Plan card |
+| Down | `col-opt` | detail modal card was replaced with **Paid Amount** (sum of payment history) per developer instruction; down payment is still part of the Reserve form |
+| Actions | removed entirely | no column on any breakpoint — every row opens the detail modal on click (`cursor-pointer` + row `onClick`), which serves the button's purpose; the freed width lets the Bike column expand |
+
+Display set (Rule 0): **Model over (status-dot + VIN) merged, Customer, Reserved,
+Total-over-Paid stack with Balance below**. All cells `text-xs` with `whitespace-nowrap`
+so entries stay on one
+line; the whole row opens the detail modal on phones (Rule 2 — Plan, Down and the
+payment history are all reachable there).
 
 ---
 

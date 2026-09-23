@@ -200,8 +200,22 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
               {prods !== null && avail.length === 0 && <div className="text-xs text-slate-600 py-6 text-center">No products match.</div>}
               {avail.map((p) => (
                 <button key={p.id} type="button" onClick={() => addOne(p)} className="w-full text-left px-2.5 py-2 rounded-lg border border-slate-800 hover:border-brand-500/50">
-                  <div className="text-sm text-white truncate">{p.name}</div>
-                  <div className="text-[11px] text-slate-500 font-mono">{p.sku} - {p.stock_qty} in stock</div>
+                  <div className="flex items-end justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm text-white truncate">{p.name}</div>
+                      <div className="text-[11px] text-slate-500 font-mono truncate">{p.sku} - {p.stock_qty} in stock</div>
+                    </div>
+                    {/* Filled status chip, bottom-right (same StockChip language as admin) */}
+                    <span
+                      title={p.stock_qty === 0 ? 'Out of stock' : `${p.stock_qty} in stock${p.stock_qty <= p.reorder_level ? ' (low)' : ''}`}
+                      className={cn(
+                        'inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold text-slate-900 shrink-0',
+                        p.stock_qty === 0 ? 'bg-red-400' : p.stock_qty <= p.reorder_level ? 'bg-orange-400' : 'bg-emerald-400',
+                      )}
+                    >
+                      {p.stock_qty === 0 ? 'Out' : p.stock_qty <= p.reorder_level ? 'Low' : 'OK'}
+                    </span>
+                  </div>
                 </button>
               ))}
             </div>

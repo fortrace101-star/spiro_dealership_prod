@@ -4,6 +4,7 @@ const { one, many, query, pool } = require('../db');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { audit } = require('../middleware/audit');
+const { verifyPassword } = require('../auth');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -477,7 +478,13 @@ router.post('/reservations/:id/complete', requireRole(), async (req, res) => {
 // Release an active reservation: the bike returns to 'in_stock' so it can be
 // re-sold (the reservation is kept for history as 'released').
 router.post('/reservations/:id/release', requireRole(), async (req, res) => {
-  const { note } = req.body || {};
+  const { note, password } = req.body || {};
+  // Identity check: releasing a reservation requires the acting user's own
+  // password, verified server-side before any state is changed.
+  const me = await one('SELECT password_hash FROM users WHERE id = $1', [req.user.id]);
+  if (!me || !(await verifyPassword(password || '', me.password_hash))) {
+    return res.status(403).json({ error: 'Password verification failed' });
+  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');

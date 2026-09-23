@@ -238,10 +238,10 @@ export default function BikesPage() {
                   const price = b.status === 'sold' ? b.sold_price ?? b.selling_price : b.selling_price
                   return (
                     <tr key={b.id} className="hover:bg-slate-800/30 cursor-pointer" onClick={() => setDetailBike(b)}>
-                      {/* Phones: Model over the bare VIN; sm+: separate VIN / Model columns */}
+                      {/* Phones: Model over the VIN subline (prefixed "VIN :"); sm+: separate VIN / Model columns */}
                       <td className="td sm:hidden">
                         <div className="font-medium text-white">{b.model}{b.color && <span className="text-slate-500 text-xs"> · {b.color}</span>}{b.year ? ` · ${b.year}` : ''}</div>
-                        <div className="text-[11px] font-mono text-brand-300">{b.vin}</div>
+                        <div className="text-[11px] font-mono text-brand-300">VIN : {b.vin}</div>
                       </td>
                       <td className="td col-opt font-mono text-xs text-brand-300">{b.vin}</td>
                       <td className="td col-opt sm:text-[13px]">{b.model}{b.color && <span className="text-slate-500 text-xs"> · {b.color}</span>}{b.year ? ` · ${b.year}` : ''}</td>
