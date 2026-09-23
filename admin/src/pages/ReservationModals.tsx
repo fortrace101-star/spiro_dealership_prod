@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import { cn } from '../lib/cn'
 import { dateShort, dateTime, num, PAYMENT_LABELS, timeShort, ugx } from '../lib/format'
 import type { Bike, BikeReservation, Customer } from '../lib/types'
-import { Badge, EmptyState, Spinner } from '../components/ui'
+import { Badge, badgeTint, EmptyState, Spinner } from '../components/ui'
 import { Field, Modal } from './InventoryPage'
 
 const PLAN_OPTIONS = [3, 6, 9, 12, 18, 24]
@@ -351,8 +351,8 @@ export function ReserveBikeModal({ onClose, onDone }: { onClose: () => void; onD
           </Field>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Total price (UGX) *">
-              <input className="input" type="number" value={form.total_price} onChange={(e) => setForm((f) => ({ ...f, total_price: e.target.value }))} required />
+            <Field label="Total price (UGX) * (locked)">
+              <input className="input" type="number" value={form.total_price} readOnly required title="Locked: the total price mirrors the selected bike's catalog price" />
             </Field>
             <Field label="Down payment (UGX) *">
               <input className="input" type="number" value={form.down_payment} onChange={(e) => setForm((f) => ({ ...f, down_payment: e.target.value }))} required />
@@ -557,9 +557,9 @@ export function ReservationDetailModal({
               <Summary label="Plan" value={reservation.plan_months ? `${num(reservation.plan_months)} months` : '—'} />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm mt-3">
-              <div>
-                <span className="text-slate-500">Status</span>{' '}
-                <span className="text-white font-medium">{reservation.status}</span>
+              <div className={cn('border rounded-xl p-3', badgeTint(reservation.status).card)}>
+                <div className="text-xs text-slate-500">Status</div>
+                <div className={cn('font-medium capitalize', badgeTint(reservation.status).text)}>{reservation.status.replace('_', ' ')}</div>
               </div>
               <div>
                 <span className="text-slate-500">Reserved</span>{' '}

@@ -4,7 +4,8 @@ import { compactUgx, dateTime, num, PAYMENT_LABELS, timeAgo, ugx } from '../lib/
 import { PERIODS } from '../lib/periods'
 import type { Period } from '../lib/periods'
 import type { Sale, SaleItem } from '../lib/types'
-import { Badge, EmptyState, PageHeader, Spinner } from '../components/ui'
+import { Badge, badgeTint, EmptyState, PageHeader, Spinner } from '../components/ui'
+import { cn } from '../lib/cn'
 import { PeriodPicker } from '../components/PeriodPicker'
 import { Field } from './InventoryPage'
 import { useIsPhone, usePageSize } from '../lib/usePageSize'
@@ -181,7 +182,10 @@ export default function SalesPage() {
               <Info label="Payment" value={PAYMENT_LABELS[detail.sale.payment_method] || detail.sale.payment_method} />
               <Info label="Device" value={detail.sale.device_id || '—'} />
               {detail.sale.bike_vin && <Info label="Bike VIN" value={detail.sale.bike_vin} />}
-              <Info label="Status" value={detail.sale.status} />
+              <div className={cn('border rounded-xl p-3', badgeTint(detail.sale.status).card)}>
+                <div className="text-xs text-slate-500 mb-1">Status</div>
+                <div className={cn('text-sm font-semibold capitalize', badgeTint(detail.sale.status).text)}>{detail.sale.status.replace('_', ' ')}</div>
+              </div>
             </div>
 
             <table className="w-full mb-6">

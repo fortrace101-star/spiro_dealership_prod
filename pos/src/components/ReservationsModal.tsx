@@ -17,6 +17,18 @@ const STATUS_STYLES: Record<string, string> = {
   expired: 'bg-red-500/15 text-red-300 border-red-500/30',
 }
 
+/**
+ * Card tint + text color matching how `StatusBadge` renders the same status —
+ * so a detail section's background aligns with the badge seen on the table.
+ */
+function statusTint(status: string): { card: string; text: string } {
+  const parts = (STATUS_STYLES[status] || STATUS_STYLES.released).split(' ')
+  return {
+    card: parts.filter((c) => !c.startsWith('text-')).join(' '),
+    text: parts.filter((c) => c.startsWith('text-')).join(' '),
+  }
+}
+
 function Shell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -231,9 +243,27 @@ function ReserveForm({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
+  // Catalog price source: total is locked to the selected bike (like the
+  // delivery reference on receive-stock), never typed by the cashier.
+  const catalogBikes = useLiveQuery(() => db.bikes.where('status').equals('in_stock').toArray(), [], [] as Bike[])
+
   function pickBike(id: string) {
     setBikeId(id)
+    const b = (catalogBikes || []).find((x) => x.id === id)
+    if (b) setTotalPrice(String(Number(b.selling_price) || 0))
+    else if (!id) setTotalPrice('')
   }
+
+  // Keep a pre-selected/scanned bike's locked price in sync once the local
+  // catalog finishes loading (pickBike may have run before bikes arrived).
+  useEffect(() => {
+    if (!bikeId) return
+    const b = (catalogBikes || []).find((x) => x.id === bikeId)
+    if (b) {
+      const price = String(Number(b.selling_price) || 0)
+      setTotalPrice((cur) => (cur === price ? cur : price))
+    }
+  }, [bikeId, catalogBikes])
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -285,8 +315,8 @@ function ReserveForm({
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <FieldWrap label="Total price (UGX) *">
-          <input className="input" type="number" value={totalPrice} onChange={(e) => setTotalPrice(e.target.value)} required />
+        <FieldWrap label="Total price (UGX) * (locked)">
+          <input className="input" type="number" value={totalPrice} readOnly required title="Locked: the total price mirrors the selected bike's catalog price" />
         </FieldWrap>
         <FieldWrap label="Down payment (UGX) *">
           <input className="input" type="number" value={downPayment} onChange={(e) => setDownPayment(e.target.value)} required />
@@ -493,7 +523,10 @@ function DetailPane({
           <span className="text-slate-500">Customer</span>{' '}
           <span className="text-white">{reservation.customer?.full_name || '—'}{reservation.customer?.phone ? ` · ${reservation.customer.phone}` : ''}</span>
         </div>
-        <div><span className="text-slate-500">Status</span> <span className="text-white capitalize">{reservation.status}</span></div>
+        <div className={cn('rounded-xl border p-3', statusTint(reservation.status).card)}>
+          <div className="text-xs text-slate-500">Status</div>
+          <div className={cn('font-medium capitalize', statusTint(reservation.status).text)}>{reservation.status}</div>
+        </div>
       </div>
 
       <div>

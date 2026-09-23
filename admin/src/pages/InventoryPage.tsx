@@ -244,7 +244,12 @@ export default function InventoryPage() {
               <Info label="Stock value" value={detail.stock_value != null ? ugx(detail.stock_value) : ugx(Number(detail.cost_price) * detail.stock_qty)} />
               <Info label="Min stock" value={num(detail.min_stock)} />
               <Info label="Reorder level" value={num(detail.reorder_level)} />
-              <Info label="Status" value={detail.stock_qty === 0 ? 'Out of stock' : detail.stock_qty <= detail.reorder_level ? 'Low stock' : 'In stock'} />
+              <div className={cn('border rounded-xl p-3', stockStatusMeta(detail.stock_qty, detail.reorder_level).card)}>
+                <div className="text-xs text-slate-500 mb-1">Status</div>
+                <div className={cn('text-sm font-semibold', stockStatusMeta(detail.stock_qty, detail.reorder_level).text)}>
+                  {detail.stock_qty === 0 ? 'Out of stock' : detail.stock_qty <= detail.reorder_level ? 'Low stock' : 'In stock'}
+                </div>
+              </div>
               <Info label="Last updated" value={dateTime(detail.updated_at)} />
             </div>
 

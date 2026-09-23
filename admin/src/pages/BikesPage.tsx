@@ -144,7 +144,10 @@ export default function BikesPage() {
             <Info label="Year" value={String(lookupResult.bike.year ?? '—')} />
             <Info label="Motor" value={lookupResult.bike.motor_number || '—'} />
             <Info label="Battery" value={lookupResult.bike.battery_serial || '—'} />
-            <Info label="Status" value={lookupResult.bike.status} />
+            <div className={cn('border rounded-xl p-3', badgeTint(lookupResult.bike.status).card)}>
+              <div className="text-xs text-slate-500 mb-1">Status</div>
+              <div className={cn('text-sm font-semibold capitalize', badgeTint(lookupResult.bike.status).text)}>{lookupResult.bike.status.replace('_', ' ')}</div>
+            </div>
             <Info label="Cost" value={ugx(lookupResult.bike.cost_price)} />
             <Info label={lookupResult.bike.status === 'sold' ? 'Sold for' : 'Sell price'} value={ugx(lookupResult.bike.sold_price ?? lookupResult.bike.selling_price)} />
             <Info label="Customer" value={lookupResult.bike.customer_name || '—'} />

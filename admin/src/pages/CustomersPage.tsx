@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { compactUgx, dateTime, PAYMENT_LABELS, ugx } from '../lib/format'
 import type { Customer, Sale, SaleItem } from '../lib/types'
-import { Badge, EmptyState, PageHeader, Spinner } from '../components/ui'
+import { Badge, badgeTint, EmptyState, PageHeader, Spinner } from '../components/ui'
+import { cn } from '../lib/cn'
 import { Field, Modal } from './InventoryPage'
 
 interface CustomerDetail {
@@ -194,7 +195,10 @@ export default function CustomersPage() {
               <Info label="Customer" value={saleDetail.sale.customer_name || 'Walk-in'} />
               <Info label="Cashier" value={saleDetail.sale.cashier_name || '—'} />
               <Info label="Payment method" value={PAYMENT_LABELS[saleDetail.sale.payment_method] || saleDetail.sale.payment_method} />
-              <Info label="Status" value={saleDetail.sale.status} />
+              <div className={cn('border rounded-xl p-3', badgeTint(saleDetail.sale.status).card)}>
+                <div className="text-xs text-slate-500 mb-1">Status</div>
+                <div className={cn('text-sm font-semibold capitalize', badgeTint(saleDetail.sale.status).text)}>{saleDetail.sale.status.replace('_', ' ')}</div>
+              </div>
               <Info label="Device" value={saleDetail.sale.device_id || '—'} />
               <Info label="Transaction ID" value={saleDetail.sale.client_txn_id || '—'} />
               {saleDetail.sale.bike_vin && <Info label="Bike VIN" value={saleDetail.sale.bike_vin} />}

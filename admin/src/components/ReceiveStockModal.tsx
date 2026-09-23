@@ -36,7 +36,8 @@ export default function ReceiveStockModal({ list, onClose, onDone }: Props) {
   )
   // Delivery reference defaults to the reorder list title plus " - STK"
   // (e.g. "Reorder - 20 Sep - 01 - STK") so the delivery is traceable to the
-  // list it fulfils; still editable and required.
+  // list it fulfils. Locked while fulfilling a list — the reference must keep
+  // mirroring the list name for tracking.
   const [ref, setRef] = useState(() => {
     const t = list.title || list.reference || ''
     return t ? t + ' - STK' : ''
@@ -126,7 +127,7 @@ export default function ReceiveStockModal({ list, onClose, onDone }: Props) {
         </p>
 
         <div className="grid grid-cols-2 gap-2 mb-3">
-          <label className="block"><span className="text-xs text-slate-400">Delivery reference *</span><input className="input" value={ref} onChange={(e) => setRef(e.target.value)} placeholder="Delivery reference" /></label>
+          <label className="block"><span className="text-xs text-slate-400">Delivery reference * (locked)</span><input className="input" value={ref} readOnly title="Locked: the delivery reference mirrors the reorder list being fulfilled" placeholder="Delivery reference" /></label>
           <label className="block"><span className="text-xs text-slate-400">Supplier *</span><input className="input" value={supplier} onChange={(e) => setSupplier(e.target.value)} placeholder="Supplier name" /></label>
           <label className="block"><span className="text-xs text-slate-400">Delivery cost (UGX)</span><input className="input" type="number" min={0} value={delivery} onChange={(e) => setDelivery(e.target.value)} placeholder="Delivery cost (UGX)" /></label>
           <label className="block"><span className="text-xs text-slate-400">Note</span><input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes" /></label>
