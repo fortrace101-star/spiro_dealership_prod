@@ -7,10 +7,15 @@ let buffer = ''
 let timeout: ReturnType<typeof setTimeout> | null = null
 let active = false
 let lastKeyTime = 0
+let onBarcodeCb: ((code: string) => void) | null = null
 
 const MIN_LENGTH = 4
 const TYPING_TIMEOUT_MS = 100
-const MAX_GAP_MS = 120
+// Generous gap so a human typing the digits on a keyboard can pass the
+// "scanner speed" test too — a real gun fires at ≤50 ms/char, so production
+// scans are completely unaffected. Human typing anywhere else is still safe:
+// keys are dropped while focus is in an input, and a slow buffer is discarded.
+const MAX_GAP_MS = 400
 
 function isTypingTarget(el: EventTarget | null): boolean {
   if (!el || !(el instanceof HTMLElement)) return false
@@ -19,6 +24,7 @@ function isTypingTarget(el: EventTarget | null): boolean {
 }
 
 export function startBarcodeScanner(onBarcode: (code: string) => void): () => void {
+  onBarcodeCb = onBarcode
   if (active) return () => {}
   active = true
 
@@ -63,5 +69,18 @@ export function startBarcodeScanner(onBarcode: (code: string) => void): () => vo
   return () => {
     window.removeEventListener('keydown', handleKeyDown)
     active = false
+    onBarcodeCb = null
   }
+}
+
+/**
+ * Simulate a scan programmatically — runs the exact same callback a real
+ * scanner (or a keyboard-typed scan) triggers. Used by the on-screen
+ * "test scan" box so the full flow can be exercised without a physical gun,
+ * and handy for demos/support later.
+ */
+export function dispatchBarcode(code: string): void {
+  const trimmed = code.trim()
+  if (!trimmed || !onBarcodeCb) return
+  onBarcodeCb(trimmed)
 }

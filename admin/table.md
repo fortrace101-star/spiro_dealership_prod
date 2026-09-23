@@ -229,12 +229,13 @@ view exists or add one (Rule 2).
 | Page / table | Keep on mobile | Hide with `col-opt` |
 |---|---|---|
 | Inventory (main) | ✅ done | Category, Status, Actions (phones merge Cost/Price into one stacked column; PC keeps them separate) |
-| Sales (main, 7 cols) | ✅ done | Receipt, Cashier, Customer |
+| Sales (main, 7 cols) | ✅ done | Receipt, Cashier, Customer (credit rows also carry a Pending approval / Rejected chip beside the payment badge) |
+| Credit (ledger, 6 cols) | ✅ done | Total, Paid (phones keep Receipt + customer subline, Balance, Status, Actions; rows open the drawer) |
 | Sales (items sub-table) | all — already fits | — |
 | Purchasing (item table inside the modal) | SKU, Product, Qty, Line total | Unit cost |
 | Bikes (7 cols) | ✅ done | Battery (Model/VIN + Cost/Price stack on phones, separate on PC) |
 | Reservations | ✅ done | Plan, Down (phones: Model over dot+VIN merged cell; Total/Paid/Balance stack; no Actions — rows open the detail modal on every breakpoint) |
-| Approvals (6 cols) | ✅ done | Request, Status + actions (Type column removed entirely; Requested by, When hidden on phones — plus Pending/Approved/Rejected/All status filter with per-status badges) |
+| Approvals (6 cols) | ✅ done | Request, Status + actions (Type column removed entirely; Requested by, When hidden on phones — Pending/Approved/Rejected filter, badge only on Pending, category count badges on Credit/e-Bike) |
 | Team & codes (staff, 4 cols) | ✅ done | Expires, only if it still overflows |
 | Settings (staff, 5 cols) | Name, Revenue | Sales, Profit, Discounts |
 | Overview (low stock, 3 cols) | all three | — |

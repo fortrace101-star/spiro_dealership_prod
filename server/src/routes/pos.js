@@ -72,7 +72,7 @@ router.get('/me/today', async (req, res) => {
             COALESCE(sum(total),0) AS revenue,
             COALESCE(sum(profit),0) AS profit
        FROM sales
-      WHERE cashier_id = $1 AND created_at >= date_trunc('day', now())`, [req.user.id]
+      WHERE cashier_id = $1 AND status = 'completed' AND created_at >= date_trunc('day', now())`, [req.user.id]
   );
   res.json({ today: stats });
 });
@@ -200,6 +200,126 @@ router.post('/reservations/:id/release', async (req, res) => {
     if (err.status) return res.status(err.status).json({ error: err.message });
     console.error('[pos/reservations] release failed:', err);
     res.status(500).json({ error: 'Failed to release reservation' });
+  }
+});
+
+// ---------- Credit sales: pending-approval queue, finalize, settlement payments ----------
+
+/** Pending credit sales for this cashier + outstanding debt this operator can settle. */
+router.get('/credit-sales', async (req, res) => {
+  try {
+    const q = (req.query.q || '').trim();
+    // Pending queue: checkout sent for approval — visible until decided+finalized.
+    // Pending queue: checkout sent for approval. Rejected sales stay in this
+    // list until the operator confirms reception (acknowledged_at) — the same
+    // persistence approved sales get until Finalize.
+    const pending = await many(
+      `SELECT s.id, s.receipt_no, s.total, s.created_at, s.status,
+              c.full_name AS customer_name, c.phone AS customer_phone,
+              ap.approval_status, ap.acknowledged_at
+         FROM sales s LEFT JOIN customers c ON c.id = s.customer_id
+         LEFT JOIN LATERAL (
+           SELECT a.status AS approval_status, a.acknowledged_at
+             FROM approvals a
+            WHERE a.type = 'credit_sale' AND a.payload ->> 'sale_id' = s.id::text
+            ORDER BY a.created_at DESC LIMIT 1
+         ) ap ON true
+        WHERE s.payment_method = 'credit' AND s.cashier_id = $1
+          AND (s.status = 'pending_credit'
+               OR (s.status = 'rejected' AND ap.acknowledged_at IS NULL))
+        ORDER BY s.created_at DESC LIMIT 50`, [req.user.id]
+    );
+    let sql = `SELECT s.id, s.receipt_no, s.total, s.created_at,
+              c.full_name AS customer_name, c.phone AS customer_phone,
+              COALESCE((SELECT sum(amount) FROM credit_payments WHERE sale_id = s.id), 0) AS paid,
+              s.total - COALESCE((SELECT sum(amount) FROM credit_payments WHERE sale_id = s.id), 0) AS balance
+         FROM sales s LEFT JOIN customers c ON c.id = s.customer_id
+        WHERE s.payment_method = 'credit' AND s.status = 'completed'
+          AND s.total > COALESCE((SELECT sum(amount) FROM credit_payments WHERE sale_id = s.id), 0)`;
+    const params = [];
+    if (q) {
+      params.push(`%${q}%`);
+      sql += ` AND (s.receipt_no ILIKE $1 OR c.phone ILIKE $1 OR c.full_name ILIKE $1)`;
+    }
+    sql += ` ORDER BY s.created_at DESC LIMIT 20`;
+    const outstanding = await many(sql, params);
+    res.json({ pending, outstanding });
+  } catch (err) {
+    console.error('[pos/credit-sales]', err);
+    res.status(500).json({ error: 'Failed to load credit sales' });
+  }
+});
+
+/** Approval decisions for this cashier's credit sales since a timestamp
+ *  (polling fallback for the POS bell — works even when push is blocked). */
+router.get('/credit-status', async (req, res) => {
+  try {
+    const since = req.query.since ? new Date(String(req.query.since)) : null;
+    const decisions = await many(
+      `SELECT a.payload ->> 'sale_id' AS sale_id, a.payload ->> 'receipt_no' AS receipt_no,
+              a.status AS decision, a.decided_at
+         FROM approvals a
+         JOIN sales s ON s.id = (a.payload ->> 'sale_id')::uuid
+        WHERE a.type = 'credit_sale' AND a.status <> 'pending'
+          AND s.cashier_id = $1
+          AND ($2::timestamptz IS NULL OR a.decided_at > $2)
+        ORDER BY a.decided_at DESC LIMIT 50`,
+      [req.user.id, since && !Number.isNaN(since.getTime()) ? since.toISOString() : null]
+    );
+    res.json({ decisions });
+  } catch (err) {
+    console.error('[pos/credit-status]', err);
+    res.status(500).json({ error: 'Failed to load credit status' });
+  }
+});
+
+/** Finalize an approved credit sale — the operator's explicit completion click.
+ *  Stock deducts here (guarded against selling out while awaiting approval),
+ *  the sale becomes completed and the debt opens. Idempotent via retry. */
+router.post('/credit-sales/:id/finalize', async (req, res) => {
+  try {
+    const { finalizeSale } = require('../services/credit');
+    const result = await finalizeSale(req.params.id, req.user, {
+      device_id: (req.body || {}).device_id || null,
+      client_txn_id: (req.body || {}).client_txn_id || null,
+    });
+    res.status(result.duplicate ? 200 : 201).json({ ok: true, duplicate: result.duplicate, sale: result.sale });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[pos/credit finalize]', err);
+    res.status(500).json({ error: 'Failed to finalize credit sale' });
+  }
+});
+
+/** POS confirms reception of a rejection — keeps the rejected sale visible
+ *  in the credit desk until this lands (mirror of Finalize; idempotent). */
+router.post('/credit-sales/:id/ack', async (req, res) => {
+  try {
+    const { acknowledgeRejection } = require('../services/credit');
+    const result = await acknowledgeRejection(req.params.id, req.user);
+    res.json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[pos/credit ack]', err);
+    res.status(500).json({ error: 'Failed to confirm rejection' });
+  }
+});
+
+/** Record a settlement payment against an outstanding credit sale (idempotent). */
+router.post('/credit-sales/:id/payments', async (req, res) => {
+  try {
+    const { amount, payment_method, note, device_id, client_txn_id } = req.body || {};
+    if (!client_txn_id) return res.status(400).json({ error: 'client_txn_id required' });
+    const { recordPayment } = require('../services/credit');
+    const result = await recordPayment(
+      { saleId: req.params.id, amount, payment_method, note, device_id, client_txn_id },
+      req.user
+    );
+    res.status(result.duplicate ? 200 : 201).json({ ok: true, ...result });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[pos/credit payment]', err);
+    res.status(500).json({ error: 'Failed to record payment' });
   }
 });
 

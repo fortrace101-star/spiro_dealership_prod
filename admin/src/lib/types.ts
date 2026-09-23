@@ -222,6 +222,39 @@ export interface StockMovement {
   created_at: string
 }
 
+export interface CreditPayment {
+  id: string
+  amount: string | number
+  payment_method: string
+  note: string | null
+  created_at: string
+}
+
+export interface CreditLedgerItem {
+  id: string
+  name: string
+  kind: 'part' | 'bike'
+  qty: number
+  unit_price: string | number
+  line_total: string | number
+}
+
+export interface CreditLedgerSale {
+  id: string
+  receipt_no: string
+  total: string | number
+  created_at: string
+  status: string
+  customer_name: string | null
+  customer_phone: string | null
+  cashier_name: string | null
+  paid: string | number
+  balance: string | number
+  approval_status: 'pending' | 'approved' | 'rejected' | null
+  payments: CreditPayment[]
+  items: CreditLedgerItem[]
+}
+
 export interface TodayReport {
   today: {
     sales_count: number
@@ -234,6 +267,9 @@ export interface TodayReport {
     pending_approvals: number
     pending_sync: number
     credit_outstanding: number
+    credit_pending: number
+    settlement_revenue: number
+    settlement_profit: number
   }
   payments: { payment_method: string; amount: string | number; n: number }[]
   items: { kind: string; amount: string | number; qty: string | number }[]

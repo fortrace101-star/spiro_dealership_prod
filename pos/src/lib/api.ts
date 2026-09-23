@@ -1,4 +1,6 @@
-import type { Bike, BikeReservation, Customer, InstallmentPayment, Product, SessionUser } from './types'
+import type {
+  Bike, BikeReservation, CreditDecision, CreditOutstandingSale, CreditPendingSale, Customer, InstallmentPayment, Product, SessionUser,
+} from './types'
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:4000').replace(/\/+$/, '')
 const TOKEN_KEY = 'spiro_pos_token'
@@ -278,5 +280,48 @@ export const api = {
     request<{ reservation?: BikeReservation; pendingApproval?: boolean; message?: string }>(`/api/pos/reservations/${id}/release`, {
       method: 'POST',
       body: JSON.stringify({ note: note || null }),
+    }),
+
+  // ---------- Credit sales: approval queue, finalize, settlement payments ----------
+  // Online-only: finalize moves real stock and payments record real money;
+  // client_txn_id makes every retry (double-tap, network blip) idempotent.
+  creditSales: (q = '') =>
+    request<{ pending: CreditPendingSale[]; outstanding: CreditOutstandingSale[] }>(
+      `/api/pos/credit-sales${q ? `?q=${encodeURIComponent(q)}` : ''}`,
+    ),
+
+  creditStatus: (since?: string) =>
+    request<{ decisions: CreditDecision[] }>(`/api/pos/credit-status${since ? `?since=${encodeURIComponent(since)}` : ''}`),
+
+  finalizeCredit: (saleId: string, input: { device_id?: string; client_txn_id: string }) =>
+    request<{ ok: boolean; duplicate: boolean; sale: { id: string; receipt_no: string; status: string } }>(
+      `/api/pos/credit-sales/${saleId}/finalize`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+
+  // Confirm reception of a rejected decision — server keeps the rejected sale
+  // in the credit-desk queue until this lands (mirror of Finalize; idempotent).
+  ackCreditRejection: (saleId: string) =>
+    request<{ ok: boolean; sale_id: string }>(`/api/pos/credit-sales/${saleId}/ack`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+
+  creditPayment: (
+    saleId: string,
+    input: { amount: number; payment_method: string; note?: string; device_id?: string; client_txn_id: string },
+  ) =>
+    request<{ ok: boolean; duplicate: boolean; paid: number; balance: number; status: 'settled' | 'outstanding' }>(
+      `/api/pos/credit-sales/${saleId}/payments`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+
+  // ---------- Web Push (POS bell: credit decisions → the operator finalizes) ----------
+  vapidPublicKey: () => request<{ publicKey: string }>('/api/push/vapid-public-key'),
+
+  subscribe: (sub: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    request<{ ok: boolean }>('/api/push/subscribe', {
+      method: 'POST',
+      body: JSON.stringify({ ...sub, user_agent: navigator.userAgent }),
     }),
 }

@@ -46,7 +46,9 @@ function buildReceiptHTML(
           <tr><td>Subtotal</td><td class="r">${ugx(sale.subtotal)}</td></tr>
           ${sale.discount > 0 ? `<tr><td>Discount</td><td class="r">− ${ugx(sale.discount)}</td></tr>` : ''}
           <tr><td><b>TOTAL</b></td><td class="r"><b>${ugx(sale.total)}</b></td></tr>
-          <tr><td>Paid (${PAYMENT_LABELS[sale.payment_method]})</td><td class="r">${ugx(sale.amount_paid)}</td></tr>
+          ${sale.payment_method === 'credit'
+            ? `<tr><td>Status</td><td class="r">AWAITING APPROVAL</td></tr>`
+            : `<tr><td>Paid (${PAYMENT_LABELS[sale.payment_method]})</td><td class="r">${ugx(sale.amount_paid)}</td></tr>`}
           ${sale.change_due > 0 ? `<tr><td>Change</td><td class="r">${ugx(sale.change_due)}</td></tr>` : ''}
         </table>
         <hr/>
@@ -126,9 +128,15 @@ export default function ReceiptModal({ sale, onClose }: { sale: LocalSale; onClo
           <div className="mx-auto h-14 w-14 rounded-full bg-brand-500/15 border border-brand-500/40 flex items-center justify-center text-2xl mb-3">
             ✓
           </div>
-          <h3 className="font-bold text-white text-lg">Sale completed</h3>
+          <h3 className="font-bold text-white text-lg">
+            {sale.payment_method === 'credit' ? 'Sent for approval' : 'Sale completed'}
+          </h3>
           <p className="text-xs text-slate-500 mt-1">
-            {sale.status === 'pending_sync' ? 'Saved offline — will sync automatically' : 'Synced to server'}
+            {sale.payment_method === 'credit'
+              ? 'Nothing recorded yet — stock and debt move only after approval + Finalize'
+              : sale.status === 'pending_sync'
+                ? 'Saved offline — will sync automatically'
+                : 'Synced to server'}
           </p>
         </div>
 

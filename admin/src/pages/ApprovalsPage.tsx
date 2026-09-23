@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { dateTime, ugx } from '../lib/format'
 import type { Approval } from '../lib/types'
@@ -63,6 +64,7 @@ function detailRows(a: Approval): [string, string][] {
 }
 
 export default function ApprovalsPage() {
+  const navigate = useNavigate()
   const [category, setCategory] = useState<Category>('credit')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending')
 
@@ -301,6 +303,20 @@ export default function ApprovalsPage() {
                 {detail.decided_by_name ? ` by ${detail.decided_by_name}` : ''}
                 {detail.decided_at ? ` · ${dateTime(detail.decided_at)}` : ''}
               </div>
+            )}
+
+            {/* Approved credit requests arm the sale — the POS finalizes it and the
+                Credit ledger tracks it until settlement, so link straight there. */}
+            {detail.status === 'approved' && categoryOf(detail) === 'credit' && (
+              <button
+                className="btn-ghost text-sm w-full"
+                onClick={() => {
+                  setDetail(null)
+                  navigate('/credit?view=pending')
+                }}
+              >
+                View awaiting-approval sales in Credit →
+              </button>
             )}
 
             {detail.status === 'pending' && (

@@ -133,7 +133,19 @@ export default function SalesPage() {
                     </td>
                     <td className="td col-opt">{s.cashier_name || '—'}</td>
                     <td className="td col-opt text-slate-400">{s.customer_name || 'Walk-in'}</td>
-                    <td className="td"><Badge kind={s.payment_method}>{PAYMENT_LABELS[s.payment_method] || s.payment_method}</Badge></td>
+                    <td className="td">
+                      <Badge kind={s.payment_method}>{PAYMENT_LABELS[s.payment_method] || s.payment_method}</Badge>
+                      {s.payment_method === 'credit' && s.status === 'pending_credit' && (
+                        <span className="ml-1.5 inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-medium whitespace-nowrap bg-amber-500/15 text-amber-300 border-amber-500/30">
+                          Pending approval
+                        </span>
+                      )}
+                      {s.payment_method === 'credit' && s.status === 'rejected' && (
+                        <span className="ml-1.5 inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-medium whitespace-nowrap bg-red-500/15 text-red-300 border-red-500/30">
+                          Rejected
+                        </span>
+                      )}
+                    </td>
                     <td className="td text-right font-semibold text-white tabular-nums whitespace-nowrap">
                       <span className="sm:hidden">{compactUgx(s.total)}</span>
                       <span className="hidden sm:inline">{ugx(s.total)}</span>

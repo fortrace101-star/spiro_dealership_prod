@@ -3,6 +3,7 @@ import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { compactUgx, dateTime, num, PAYMENT_LABELS, timeAgo, ugx } from '../lib/format'
 import type { Approval, HourlyPoint, Product, Sale, TodayReport } from '../lib/types'
@@ -19,6 +20,7 @@ type CardDetail =
   | { kind: 'approvals'; approvals: Approval[] }
 
 export default function OverviewPage() {
+  const navigate = useNavigate()
   const [today, setToday] = useState<TodayReport | null>(null)
   const [hourly, setHourly] = useState<HourlyPoint[]>([])
   const [top, setTop] = useState<{ name: string; qty: number; revenue: number; profit: number }[]>([])
@@ -102,8 +104,9 @@ export default function OverviewPage() {
       showStatus: true,
     })
 
-  const openCredit = () =>
-    openSales({ days: 90, payment: 'credit', title: 'Credit sales outstanding', subtitle: 'Credit sales from the last 90 days' })
+  // Credit outstanding lives on the Credit ledger page now — drill straight there.
+  const openCredit = () => navigate('/credit')
+  const openCreditPending = () => navigate('/credit?view=pending')
 
   if (loading) return <Spinner />
   if (!today) return <EmptyState message="Could not load today's report." />
@@ -223,6 +226,7 @@ export default function OverviewPage() {
         <AlertCard label="Pending approvals" value={t.pending_approvals} tone="sky" onClick={openApprovals} />
         <AlertCard label="Awaiting sync (POS)" value={t.pending_sync} tone="violet" onClick={openSync} />
         <AlertCard label="Credit outstanding" value={ugx(t.credit_outstanding)} tone="red" isText onClick={openCredit} />
+        <AlertCard label="Awaiting credit approval" value={t.credit_pending} tone="amber" onClick={openCreditPending} />
       </div>
 
       {/* Top products + low stock */}

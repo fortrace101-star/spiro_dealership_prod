@@ -167,3 +167,35 @@ export const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   card: 'Card',
   credit: 'Credit',
 }
+
+/** Credit-sale row from GET /api/pos/credit-sales (pending queue, this cashier). */
+export interface CreditPendingSale {
+  id: string
+  receipt_no: string
+  total: string | number
+  created_at: string
+  status: string // 'pending_credit' until Finalize flips it to 'completed'
+  customer_name: string | null
+  customer_phone: string | null
+  approval_status: 'pending' | 'approved' | 'rejected' | null
+}
+
+/** Outsettled-debt row from GET /api/pos/credit-sales (completed, balance > 0). */
+export interface CreditOutstandingSale {
+  id: string
+  receipt_no: string
+  total: string | number
+  created_at: string
+  customer_name: string | null
+  customer_phone: string | null
+  paid: string | number
+  balance: string | number
+}
+
+/** Decision event from GET /api/pos/credit-status (POS bell polling fallback). */
+export interface CreditDecision {
+  sale_id: string
+  receipt_no: string
+  decision: 'approved' | 'rejected'
+  decided_at: string
+}

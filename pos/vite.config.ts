@@ -24,6 +24,9 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // Shared push handler (public/push-handler.js): OS notifications +
+        // in-app forwarding, so the POS hears about credit approvals.
+        importScripts: ['/push-handler.js'],
         cleanupOutdatedCaches: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         navigateFallback: '/index.html',

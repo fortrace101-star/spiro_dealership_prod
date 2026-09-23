@@ -35,23 +35,39 @@ function reportWindow(req) {
 
 /** Today's performance across all metrics — the dashboard's default view */
 router.get('/today', async (req, res) => {
+  // Product revenue/profit only — a credit sale never lands here, even after
+  // approval; its money arrives later as settlements (second query below).
+  // sales_count/discounts/cost stay all-completed: a finalized credit IS a sale.
   const sales = await one(
     `SELECT count(*)::int AS sales_count,
-            COALESCE(sum(total),0) AS revenue,
-            COALESCE(sum(profit),0) AS profit,
+            COALESCE(sum(total) FILTER (WHERE payment_method <> 'credit'),0) AS revenue,
+            COALESCE(sum(profit) FILTER (WHERE payment_method <> 'credit'),0) AS profit,
             COALESCE(sum(cost_total),0) AS cost,
-            COALESCE(avg(total),0) AS avg_transaction,
+            COALESCE(avg(total) FILTER (WHERE payment_method <> 'credit'),0) AS avg_transaction,
             COALESCE(sum(discount),0) AS discounts
        FROM sales
       WHERE created_at >= date_trunc('day', now()) AND status = 'completed'`
+  );
+  const settlement = await one(
+    `SELECT COALESCE(sum(cp.amount),0) AS revenue,
+            COALESCE(count(*),0)::int AS n,
+            COALESCE(sum(cp.amount * (s.profit / NULLIF(s.total,0))),0) AS profit
+       FROM credit_payments cp JOIN sales s ON s.id = cp.sale_id
+      WHERE cp.created_at >= date_trunc('day', now())`
   );
 
   const payments = await many(
     `SELECT payment_method, COALESCE(sum(total),0) AS amount, count(*)::int AS n
        FROM sales
       WHERE created_at >= date_trunc('day', now()) AND status = 'completed'
+        AND payment_method <> 'credit'
       GROUP BY payment_method ORDER BY amount DESC`
   );
+  // Credit settlements are their own line — money received for debts, never
+  // folded into cash/card (the sale itself was never revenue).
+  if (Number(settlement.n) > 0) {
+    payments.push({ payment_method: 'credit_settlement', amount: Number(settlement.revenue), n: Number(settlement.n) });
+  }
 
   const items = await many(
     `SELECT si.kind, COALESCE(sum(si.line_total),0) AS amount, COALESCE(sum(si.qty),0) AS qty
@@ -70,7 +86,11 @@ router.get('/today', async (req, res) => {
     `SELECT count(*)::int AS n FROM sales WHERE status = 'pending'`
   );
   const creditOutstanding = await one(
-    `SELECT COALESCE(sum(total),0) AS amount FROM sales WHERE payment_method = 'credit' AND status = 'completed'`
+    `SELECT COALESCE(sum(total),0) - COALESCE((SELECT sum(amount) FROM credit_payments),0) AS amount
+       FROM sales WHERE payment_method = 'credit' AND status = 'completed'`
+  );
+  const creditPending = await one(
+    `SELECT count(*)::int AS n FROM sales WHERE status = 'pending_credit'`
   );
 
   const bikesSold = await one(
@@ -81,8 +101,8 @@ router.get('/today', async (req, res) => {
   res.json({
     today: {
       sales_count: Number(sales.sales_count),
-      revenue: Number(sales.revenue),
-      profit: Number(sales.profit),
+      revenue: Number(sales.revenue) + Number(settlement.revenue),
+      profit: Number(sales.profit) + Number(settlement.profit),
       avg_transaction: Number(sales.avg_transaction),
       discounts: Number(sales.discounts),
       bikes_sold: Number(bikesSold?.n || 0),
@@ -90,6 +110,9 @@ router.get('/today', async (req, res) => {
       pending_approvals: Number(pendingApprovals?.n || 0),
       pending_sync: Number(pendingSync?.n || 0),
       credit_outstanding: Number(creditOutstanding?.amount || 0),
+      credit_pending: Number(creditPending?.n || 0),
+      settlement_revenue: Number(settlement.revenue),
+      settlement_profit: Number(settlement.profit),
     },
     payments,
     items,
@@ -103,14 +126,31 @@ router.get('/today/hourly', async (req, res) => {
             COALESCE(sum(total),0) AS revenue, COALESCE(sum(profit),0) AS profit
        FROM sales
       WHERE created_at >= (date_trunc('day', now() AT TIME ZONE 'Africa/Kampala') AT TIME ZONE 'Africa/Kampala')
+        AND payment_method <> 'credit'
+      GROUP BY hour ORDER BY hour`
+  );
+  // Settlement payments recognized in the hour they arrive — a credit sale's
+  // money enters the chart here, never through the sale row itself.
+  const settlements = await many(
+    `SELECT EXTRACT(HOUR FROM cp.created_at AT TIME ZONE 'Africa/Kampala')::int AS hour,
+            COALESCE(sum(cp.amount),0) AS revenue,
+            COALESCE(sum(cp.amount * (s.profit / NULLIF(s.total,0))),0) AS profit
+       FROM credit_payments cp JOIN sales s ON s.id = cp.sale_id
+      WHERE cp.created_at >= (date_trunc('day', now() AT TIME ZONE 'Africa/Kampala') AT TIME ZONE 'Africa/Kampala')
       GROUP BY hour ORDER BY hour`
   );
   const nowHour = (new Date().getUTCHours() + 3) % 24;
   const byHour = new Map(rows.map((r) => [Number(r.hour), r]));
+  const stByHour = new Map(settlements.map((r) => [Number(r.hour), r]));
   const series = [];
   for (let h = 0; h <= nowHour; h++) {
     const r = byHour.get(h);
-    series.push({ hour: h, revenue: Number(r?.revenue || 0), profit: Number(r?.profit || 0) });
+    const st = stByHour.get(h);
+    series.push({
+      hour: h,
+      revenue: Number(r?.revenue || 0) + Number(st?.revenue || 0),
+      profit: Number(r?.profit || 0) + Number(st?.profit || 0),
+    });
   }
   res.json({ series });
 });
@@ -125,19 +165,45 @@ async function calendarQuery(req, res) {
 
   const kpi = await one(
     `SELECT count(*)::int AS sales_count,
-            COALESCE(sum(total),0) AS revenue,
-            COALESCE(sum(profit),0) AS profit,
-            COALESCE(avg(total),0) AS avg_transaction
+            COALESCE(sum(total) FILTER (WHERE payment_method <> 'credit'),0) AS revenue,
+            COALESCE(sum(profit) FILTER (WHERE payment_method <> 'credit'),0) AS profit,
+            COALESCE(avg(total) FILTER (WHERE payment_method <> 'credit'),0) AS avg_transaction
        FROM sales
       WHERE ${clause} AND status='completed'`, params
   );
+  // Settlements received inside the window — the credit half of revenue.
+  const settlement = await one(
+    `SELECT COALESCE(sum(cp.amount),0) AS revenue,
+            COALESCE(sum(cp.amount * (s.profit / NULLIF(s.total,0))),0) AS profit
+       FROM credit_payments cp JOIN sales s ON s.id = cp.sale_id
+      WHERE cp.${clause}`, params
+  );
   const daily = await many(
     `SELECT date_trunc('day', created_at)::date AS day,
-            COALESCE(sum(total),0) AS revenue, COALESCE(sum(profit),0) AS profit
+            COALESCE(sum(total) FILTER (WHERE payment_method <> 'credit'),0) AS revenue,
+            COALESCE(sum(profit) FILTER (WHERE payment_method <> 'credit'),0) AS profit
        FROM sales
       WHERE ${clause} AND status='completed'
       GROUP BY day ORDER BY day`, params
   );
+  const dailySettle = await many(
+    `SELECT date_trunc('day', cp.created_at)::date AS day,
+            COALESCE(sum(cp.amount),0) AS revenue,
+            COALESCE(sum(cp.amount * (s.profit / NULLIF(s.total,0))),0) AS profit
+       FROM credit_payments cp JOIN sales s ON s.id = cp.sale_id
+      WHERE cp.${clause}
+      GROUP BY day ORDER BY day`, params
+  );
+  // Each day = product revenue + settlements received that day; `settlement`
+  // kept alongside so the UI can show the split.
+  const settleByDay = new Map(dailySettle.map((r) => [String(r.day), r]));
+  for (const row of daily) {
+    const st = settleByDay.get(String(row.day));
+    const add = Number(st?.revenue || 0);
+    row.revenue = Number(row.revenue) + add;
+    row.profit = Number(row.profit) + Number(st?.profit || 0);
+    row.settlement = add;
+  }
   const bikesSold = await one(
     `SELECT count(*)::int AS n FROM sale_items si JOIN sales s ON s.id = si.sale_id
       WHERE si.kind='bike' AND s.${clause}`, params
@@ -146,9 +212,14 @@ async function calendarQuery(req, res) {
     `SELECT COALESCE(sum(si.qty),0)::int AS n FROM sale_items si JOIN sales s ON s.id = si.sale_id
       WHERE si.kind='part' AND s.${clause}`, params
   );
+  // Outstanding debt is a point-in-time balance: all finalized credit sales
+  // minus every settlement received (never windowed — it exists today).
   const credit = await one(
-    `SELECT COALESCE(sum(total),0) AS amount FROM sales
-      WHERE payment_method='credit' AND ${clause}`, params
+    `SELECT COALESCE(sum(total),0) - COALESCE((SELECT sum(amount) FROM credit_payments),0) AS amount
+       FROM sales WHERE payment_method='credit' AND status='completed'`
+  );
+  const creditPending = await one(
+    `SELECT count(*)::int AS n FROM sales WHERE status='pending_credit'`
   );
   const stockValue = await one(
     `SELECT COALESCE(sum(stock_qty * cost_price),0) AS amount FROM products WHERE active`

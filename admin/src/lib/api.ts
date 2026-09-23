@@ -1,5 +1,5 @@
 import type {
-  ActivationCode, Approval, AuditEntry, Bike, BikeReservation, Customer, CustomerBikeLink, InstallmentPayment,
+  ActivationCode, Approval, AuditEntry, Bike, BikeReservation, CreditLedgerSale, Customer, CustomerBikeLink, InstallmentPayment,
   Product, PurchasingListItem, PurchasingRecord, RangeReport,
   Sale, SaleItem, StockMovement, TodayReport, HourlyPoint, User, VinLookupResult,
 } from './types'
@@ -214,6 +214,18 @@ export const api = {
   approvals: (status = 'pending') => request<{ approvals: Approval[] }>(`/api/admin/approvals?status=${status}`),
   decideApproval: (id: string, decision: 'approved' | 'rejected', note = '') =>
     request<{ approval: Approval }>(`/api/admin/approvals/${id}/decide`, { method: 'POST', body: JSON.stringify({ decision, note }) }),
+  creditLedger: (
+    view: 'outstanding' | 'pending' | 'settled' = 'outstanding',
+    params: { q?: string; from?: string; to?: string } = {},
+  ) => {
+    const sp = new URLSearchParams({ view })
+    if (params.q) sp.set('q', params.q)
+    if (params.from) sp.set('from', params.from)
+    if (params.to) sp.set('to', params.to)
+    return request<{ sales: CreditLedgerSale[] }>(`/api/admin/credit/sales?${sp.toString()}`)
+  },
+  creditPayment: (saleId: string, input: { amount: number; payment_method: string; note?: string; client_txn_id?: string }) =>
+    request<{ ok: boolean; duplicate?: boolean }>(`/api/admin/sales/${saleId}/credit-payments`, { method: 'POST', body: JSON.stringify(input) }),
   audit: () => request<{ entries: AuditEntry[] }>('/api/admin/audit'),
 
   // push

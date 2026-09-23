@@ -89,7 +89,7 @@ async function recordSale(input, actor) {
         input.client_txn_id, receiptNo, actor.id, customerId, bikeId,
         subtotal, discount, total, costTotal, total - costTotal,
         input.payment_method, Number(input.amount_paid || 0), Number(input.change_due || 0),
-        input.device_id || null, input.payment_method === 'credit' ? 'completed' : 'completed',
+        input.device_id || null, input.payment_method === 'credit' ? 'pending_credit' : 'completed',
         input.created_at || null,
       ]
     );
@@ -114,21 +114,27 @@ async function recordSale(input, actor) {
       );
       items.push(itemRes.rows[0]);
 
-      if (it.kind === 'bike' && bikeRef) {
-        // Bike leaves inventory: mark sold, assign customer
-        await client.query(
-          `UPDATE bikes
-              SET status = 'sold', sold_at = COALESCE($2, now()), sold_price = $3, customer_id = COALESCE($4, customer_id), updated_at = now()
-            WHERE id = $1 AND status <> 'sold'`,
-          [bikeRef, input.created_at || null, it.unit_price, customerId]
-        );
-      } else if (productRef) {
-        await client.query(`UPDATE products SET stock_qty = stock_qty - $2, updated_at = now() WHERE id = $1`, [productRef, it.qty]);
-        await client.query(
-          `INSERT INTO stock_movements (product_id, qty, type, sale_id, user_id, device_id, client_txn_id, note)
-           VALUES ($1, $2, 'sale', $3, $4, $5, $6, $7)`,
-          [productRef, -Math.abs(it.qty), sale.id, actor.id, input.device_id || null, input.client_txn_id, `Sale ${receiptNo}`]
-        );
+      // Credit sales hold NOTHING until the POS operator finalizes after admin
+      // approval — stock, bike status and movements all happen in
+      // services/credit.finalizeSale instead. Items are still inserted above so
+      // the receipt renders and finalize knows what to deduct.
+      if (sale.status !== 'pending_credit') {
+        if (it.kind === 'bike' && bikeRef) {
+          // Bike leaves inventory: mark sold, assign customer
+          await client.query(
+            `UPDATE bikes
+                SET status = 'sold', sold_at = COALESCE($2, now()), sold_price = $3, customer_id = COALESCE($4, customer_id), updated_at = now()
+              WHERE id = $1 AND status <> 'sold'`,
+            [bikeRef, input.created_at || null, it.unit_price, customerId]
+          );
+        } else if (productRef) {
+          await client.query(`UPDATE products SET stock_qty = stock_qty - $2, updated_at = now() WHERE id = $1`, [productRef, it.qty]);
+          await client.query(
+            `INSERT INTO stock_movements (product_id, qty, type, sale_id, user_id, device_id, client_txn_id, note)
+             VALUES ($1, $2, 'sale', $3, $4, $5, $6, $7)`,
+            [productRef, -Math.abs(it.qty), sale.id, actor.id, input.device_id || null, input.client_txn_id, `Sale ${receiptNo}`]
+          );
+        }
       }
     }
 
@@ -180,49 +186,34 @@ async function recordSale(input, actor) {
     );
     const pushSvc = require('./push');
     setImmediate(async () => {
-      pushSvc.notifyAdmins(pushSvc.saleNotification({ ...sale, cashier_name: cashierName })).catch(() => {})
+      // A pending credit sale is announced only through its approval push —
+      // it has no stock, no revenue and no liability until finalized.
+      if (sale.status !== 'pending_credit') {
+        pushSvc.notifyAdmins(pushSvc.saleNotification({ ...sale, cashier_name: cashierName })).catch(() => {})
+      }
       // Pending approval requests created by this sale (credit / big discount)
       for (const p of approvalPushes) pushSvc.notifyAdmins(p).catch(() => {})
       // Low-stock / stock-out warnings after stock deduction
-      try {
-        for (const it of input.items || []) {
-          if (it.product_id && typeof it.product_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(it.product_id)) {
-            const product = await client.query(
-              `SELECT id, name, sku, stock_qty, reorder_level FROM products WHERE id = $1`,
-              [it.product_id]
-            )
-            if (product.rows[0]) {
-              const p = product.rows[0]
-              const qty = Number(p.stock_qty)
-              const warn = pushSvc.stockWarning(p, qty, it.kind === 'bike' ? `Bike sold — ${receiptNo}` : `Sale ${receiptNo}`)
-              if (warn) pushSvc.notifyAdmins(warn).catch(() => {})
+      // (fresh pool queries — this runs after COMMIT/client release).
+      if (sale.status !== 'pending_credit') {
+        try {
+          for (const it of input.items || []) {
+            if (it.product_id && typeof it.product_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(it.product_id)) {
+              const p = await one(
+                `SELECT id, name, sku, stock_qty, reorder_level FROM products WHERE id = $1`,
+                [it.product_id]
+              )
+              if (p) {
+                const qty = Number(p.stock_qty)
+                const warn = pushSvc.stockWarning(p, qty, it.kind === 'bike' ? `Bike sold — ${receiptNo}` : `Sale ${receiptNo}`)
+                if (warn) pushSvc.notifyAdmins(warn).catch(() => {})
+              }
             }
           }
-        }
-      } catch {}
-      // Revenue all-time high check — weekly and monthly record totals.
-      // Week key: ISO week (Monday-start). Month key: first day of the month.
-      try {
-        const weekTotal = await client.query(`SELECT COALESCE(sum(total),0) AS t FROM sales WHERE date_trunc('week', created_at) = date_trunc('week', CURRENT_DATE)`)
-        const monthTotal = await client.query(`SELECT COALESCE(sum(total),0) AS t FROM sales WHERE date_trunc('month', created_at) = date_trunc('month', CURRENT_DATE)`)
-
-        const bump = async (period, total, label) => {
-          const cur = Number(total || 0)
-          const prev = await client.query(`SELECT COALESCE(max(revenue),0) AS r FROM revenue_records WHERE period = $1`, [period])
-          if (cur > Number(prev.rows[0]?.r || 0)) {
-            const rec = await client.query(
-              `INSERT INTO revenue_records (period, revenue, date) VALUES ($1, $2, CURRENT_DATE)
-               ON CONFLICT (period) DO UPDATE SET revenue = $2, date = CURRENT_DATE
-               RETURNING revenue`,
-              [period, cur]
-            )
-            pushSvc.notifyAdmins(pushSvc.revenueRecord(rec.rows[0]?.revenue || 0, prev.rows[0]?.r || 0, new Date().toISOString().slice(0, 10), label)).catch(() => {})
-          }
-        }
-
-        await bump('week', weekTotal.rows[0]?.t, 'week')
-        await bump('month', monthTotal.rows[0]?.t, 'month')
-      } catch {}
+        } catch {}
+      }
+      // All-time-high records: product revenue + credit settlements (see helper).
+      checkRevenueRecords(pushSvc).catch(() => {})
     });
 
     return { sale, items, duplicate: false };
@@ -234,4 +225,41 @@ async function recordSale(input, actor) {
   }
 }
 
-module.exports = { recordSale };
+/**
+ * Recompute the all-time-high week/month revenue and push a record
+ * notification when beaten. Revenue = product sales (completed, non-credit)
+ * + credit settlements received — a credit sale never counts here, not even
+ * after approval; only the payments that dissolve its debt do.
+ * Uses fresh pool queries, so it is safe to call from setImmediate after COMMIT.
+ */
+async function checkRevenueRecords(pushSvc) {
+  // $trunc is one of our own literals ('week'|'month') — never user input.
+  const periodTotal = async (trunc) => one(
+    `SELECT COALESCE((SELECT sum(total) FROM sales
+        WHERE status='completed' AND payment_method <> 'credit'
+          AND date_trunc('${trunc}', created_at) = date_trunc('${trunc}', CURRENT_DATE)), 0)
+        + COALESCE((SELECT sum(amount) FROM credit_payments
+          WHERE date_trunc('${trunc}', created_at) = date_trunc('${trunc}', CURRENT_DATE)), 0) AS t`
+  );
+
+  const bump = async (period, total, label) => {
+    const cur = Number(total || 0)
+    const prev = await one(`SELECT COALESCE(max(revenue),0) AS r FROM revenue_records WHERE period = $1`, [period])
+    if (cur > Number(prev?.r || 0)) {
+      const rec = await one(
+        `INSERT INTO revenue_records (period, revenue, date) VALUES ($1, $2, CURRENT_DATE)
+         ON CONFLICT (period) DO UPDATE SET revenue = $2, date = CURRENT_DATE
+         RETURNING revenue`,
+        [period, cur]
+      )
+      if (pushSvc) pushSvc.notifyAdmins(pushSvc.revenueRecord(rec?.revenue || 0, prev?.r || 0, new Date().toISOString().slice(0, 10), label)).catch(() => {})
+    }
+  }
+
+  try {
+    await bump('week', (await periodTotal('week')).t, 'week')
+    await bump('month', (await periodTotal('month')).t, 'month')
+  } catch {}
+}
+
+module.exports = { recordSale, checkRevenueRecords };

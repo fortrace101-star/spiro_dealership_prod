@@ -123,12 +123,20 @@ CREATE TABLE IF NOT EXISTS sales (
   amount_paid NUMERIC(12,2) NOT NULL DEFAULT 0,
   change_due NUMERIC(12,2) NOT NULL DEFAULT 0,
   device_id TEXT,
-  status TEXT NOT NULL DEFAULT 'completed' CHECK (status IN ('completed','pending')),
+  status TEXT NOT NULL DEFAULT 'completed' CHECK (status IN ('completed','pending','pending_credit','rejected')),
   synced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales (created_at);
 CREATE INDEX IF NOT EXISTS idx_sales_cashier ON sales (cashier_id);
+
+-- Credit workflow migration: sales travel 'pending_credit' (checkout sent for
+-- approval — no stock, no revenue, no debt) → 'completed' (the POS operator
+-- finalized after approval) or 'rejected'. DROP + ADD runs on every boot: the
+-- drop always succeeds (IF EXISTS) so the re-add is safe on old and new installs.
+ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_status_check;
+ALTER TABLE sales ADD CONSTRAINT sales_status_check
+  CHECK (status IN ('completed','pending','pending_credit','rejected'));
 
 CREATE TABLE IF NOT EXISTS sale_items (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -167,6 +175,26 @@ CREATE INDEX IF NOT EXISTS idx_movements_txn ON stock_movements (client_txn_id);
 -- Migration: older installs wrongly enforced uniqueness on this column
 ALTER TABLE stock_movements DROP CONSTRAINT IF EXISTS stock_movements_client_txn_id_key;
 
+-- ============ CREDIT SALES (approval → liability → settlement) ============
+-- A credit checkout saves the sale as 'pending_credit': no stock moves, no
+-- revenue, no debt. Admin approval only arms the sale; the POS operator's
+-- Finalize click deducts stock and opens the debt. Each payment below then
+-- dissolves part of that debt and is recognized as revenue/profit on the day
+-- it is received — never at sale time. Mirrors bike_installment_payments.
+CREATE TABLE IF NOT EXISTS credit_payments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sale_id UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+  amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+  payment_method TEXT NOT NULL CHECK (payment_method IN ('cash','mobile_money','bank','card')),
+  paid_by UUID REFERENCES users(id),
+  device_id TEXT,
+  client_txn_id TEXT UNIQUE NOT NULL,        -- POS offline idempotency key
+  note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_credit_payments_sale ON credit_payments (sale_id);
+CREATE INDEX IF NOT EXISTS idx_credit_payments_created ON credit_payments (created_at);
+
 -- ============ WEB PUSH ============
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -191,6 +219,10 @@ CREATE TABLE IF NOT EXISTS approvals (
   note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- POS confirms it has seen a rejection: the credit desk keeps the rejected
+-- sale visible until this lands (mirrors Finalize for approved sales).
+ALTER TABLE approvals ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id BIGSERIAL PRIMARY KEY,

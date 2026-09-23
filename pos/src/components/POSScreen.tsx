@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/database'
 import { createSale, getTodaySales } from '../db/repos'
 import { api, clearSession, getDeviceId, getStoredUser, normalizeCategory, type ProductCategory, type PurchasingRecord } from '../lib/api'
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner'
+import { dispatchBarcode } from '../services/barcodeScanner'
+import { playPushChime, usePush } from '../hooks/usePush'
 import { useSyncStatus } from '../hooks/useSyncStatus'
 import { runSyncCycle } from '../services/sync'
 import { cartTotals, useCart } from '../store/cart'
@@ -12,6 +14,7 @@ import { ugx } from '../lib/format'
 import CheckoutModal from './CheckoutModal'
 import ReceiptModal from './ReceiptModal'
 import HistoryModal from './HistoryModal'
+import CreditModal, { creditBadgeCounts } from './CreditModal'
 import ReceivingScreen from './ReceivingScreen'
 import ReceiveSelectModal from './ReceiveSelectModal'
 import ReservationsModal from './ReservationsModal'
@@ -53,6 +56,30 @@ export default function POSScreen() {
   const [canReceive, setCanReceive] = useState(false)
   const [reorderCount, setReorderCount] = useState(0)
   const [flash, setFlash] = useState<string | null>(null)
+  const [showCredit, setShowCredit] = useState(false)
+  const [creditBadge, setCreditBadge] = useState({ awaiting: 0, approved: 0, rejected: 0 })
+  const [creditNote, setCreditNote] = useState<string | null>(null)
+  // Stable identity so CreditModal's load callback (and its refresh timer) don't reset every render.
+  const refreshBadge = useCallback(
+    (counts: { awaiting: number; approved: number; rejected: number }) => setCreditBadge(counts),
+    [],
+  )
+  const push = usePush()
+  // User-gesture unlock for the in-app chime: browsers block AudioContext
+  // until the first interaction, so the first click/key arms the
+  // credit-decision beep (same pattern as the admin dashboard shell).
+  const audioArmed = useRef(false)
+  useEffect(() => {
+    const arm = () => {
+      audioArmed.current = true
+    }
+    window.addEventListener('pointerdown', arm, { once: true })
+    window.addEventListener('keydown', arm, { once: true })
+    return () => {
+      window.removeEventListener('pointerdown', arm)
+      window.removeEventListener('keydown', arm)
+    }
+  }, [])
 
   // Stock-in capability is granted per activation code; admins/managers always have it.
   useEffect(() => {
@@ -72,6 +99,50 @@ export default function POSScreen() {
       .catch(() => setReorderCount(0))
     }, [])
 
+  // Credit bell — polling fallback for approval decisions (works when push is
+  // blocked): keeps the header badge fresh and toasts NEW decisions only. The
+  // last-seen decision timestamp is baselined on first run so history never toasts.
+  useEffect(() => {
+    let cancelled = false
+    async function pollCredit() {
+      if (!sync.online) return
+      try {
+        const since = localStorage.getItem('spiro_credit_seen')
+        const [{ pending }, { decisions }] = await Promise.all([api.creditSales(), api.creditStatus()])
+        if (cancelled) return
+        // Badge comes entirely from the pending list: rejected-but-unconfirmed
+        // rows are server-persisted inside it, right next to the approved ones.
+        setCreditBadge(creditBadgeCounts(pending))
+        // New since our baseline (ISO strings compare lexicographically).
+        const fresh = since ? decisions.filter((d) => d.decided_at > since) : []
+        if (fresh.length > 0) {
+          const d = fresh[0] // newest first
+          setCreditNote(
+            d.decision === 'approved'
+              ? `Credit ${d.receipt_no} approved — open Credit to finalize`
+              : `Credit ${d.receipt_no} rejected — confirm in the Credit desk, do not release the goods`,
+          )
+          // Fallback path (push blocked/offline at decision time): same beep,
+          // and it can't double-fire with the push — that path advanced the baseline.
+          if (audioArmed.current) playPushChime()
+        }
+        if (decisions.length > 0) {
+          localStorage.setItem('spiro_credit_seen', decisions[0].decided_at)
+        } else if (!since) {
+          localStorage.setItem('spiro_credit_seen', new Date().toISOString())
+        }
+      } catch {
+        /* offline or forbidden — badge stays as-is */
+      }
+    }
+    void pollCredit()
+    const id = setInterval(pollCredit, 30_000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [sync.online])
+
   const products = useLiveQuery(() => db.products.toArray(), [])
   const bikes = useLiveQuery(() => db.bikes.where('status').equals('in_stock').toArray(), [])
   const todays = useLiveQuery(() => getTodaySales(), [])
@@ -80,7 +151,9 @@ export default function POSScreen() {
     const list = todays || []
     return {
       count: list.length,
-      revenue: list.reduce((s, x) => s + x.total, 0),
+      // Credit sales are never revenue at checkout — the debt only opens on
+      // Finalize, and only settlement payments count as revenue server-side.
+      revenue: list.filter((x) => x.payment_method !== 'credit').reduce((s, x) => s + x.total, 0),
       pending: list.filter((x) => x.status === 'pending_sync').length,
     }
   }, [todays])
@@ -122,32 +195,74 @@ export default function POSScreen() {
     [cart],
   )
 
-  // Barcode scanner — local IndexedDB lookup (never a network round trip)
-  useBarcodeScanner(
-    useCallback(
-      async (code: string) => {
-        const p = await db.products.where('barcode').equals(code).first()
-        if (p) {
-          addProduct(p)
-          return
-        }
-        const b = await db.bikes.where('vin').equals(code).first()
-        if (b && b.status === 'in_stock') {
-          addBike(b)
-          return
-        }
-        setSearch(code) // fall back to manual search
-        setFlash(`No product with barcode ${code}`)
-      },
-      [addProduct, addBike],
-    ),
+  // Barcode scan handler — local IndexedDB lookup (never a network round trip).
+  // Shared by the physical scanner, keyboard-typed scans and the test-scan box.
+  const handleScan = useCallback(
+    async (code: string) => {
+      const p = await db.products.where('barcode').equals(code).first()
+      if (p) {
+        addProduct(p)
+        return
+      }
+      const b = await db.bikes.where('vin').equals(code).first()
+      if (b && b.status === 'in_stock') {
+        addBike(b)
+        return
+      }
+      setSearch(code) // fall back to manual search
+      setFlash(`No product with barcode ${code}`)
+    },
+    [addProduct, addBike],
   )
+  useBarcodeScanner(handleScan)
+
+  const [scanTest, setScanTest] = useState('')
 
   useEffect(() => {
     if (!flash) return
     const t = setTimeout(() => setFlash(null), 1800)
     return () => clearTimeout(t)
   }, [flash])
+
+  useEffect(() => {
+    if (!creditNote) return
+    const t = setTimeout(() => setCreditNote(null), 6000)
+    return () => clearTimeout(t)
+  }, [creditNote])
+
+  // Surface push-subscription failures as a toast (the account popup shows
+  // the same message persistently) — enabling alerts must never fail silently.
+  useEffect(() => {
+    if (push.error) setFlash(push.error)
+  }, [push.error])
+
+  // Web Push while the POS is open: the service worker forwards every push to
+  // the page. Credit decisions (creditEvent) raise the bell toast and refresh
+  // the header badge instantly — the 30s poll stays as the fallback for when
+  // push is blocked or the terminal was offline at decision time.
+  useEffect(() => {
+    function onMessage(e: MessageEvent) {
+      const payload = e.data?.type === 'PUSH'
+        ? (e.data.payload as { creditEvent?: boolean; title?: string; body?: string } | undefined)
+        : null
+      if (!payload) return
+      if (payload.creditEvent) {
+        setCreditNote(payload.body || payload.title || 'Credit sale decision received')
+        // Beep the operator the moment the decision lands (armed on first gesture).
+        if (audioArmed.current) playPushChime()
+        // Advance the poll baseline so the 30s fallback doesn't toast it twice.
+        localStorage.setItem('spiro_credit_seen', new Date().toISOString())
+        void api
+          .creditSales()
+          .then((r) => setCreditBadge(creditBadgeCounts(r.pending)))
+          .catch(() => {})
+      } else if (payload.title) {
+        setFlash(payload.title)
+      }
+    }
+    navigator.serviceWorker?.addEventListener('message', onMessage)
+    return () => navigator.serviceWorker?.removeEventListener('message', onMessage)
+  }, [])
 
   const totals = cartTotals(cart.items, cart.discount)
 
@@ -173,16 +288,20 @@ export default function POSScreen() {
       })),
     })
 
-    // Optimistic local stock deduction so the UI reflects reality offline
-    for (const i of cart.items) {
-      if (i.kind === 'part') {
-        await db.products.where('id').equals(i.id).modify((p: Product) => {
-          p.stock_qty = Math.max(0, p.stock_qty - i.qty)
-        })
-      } else {
-        await db.bikes.where('id').equals(i.id).modify((b: Bike) => {
-          b.status = 'sold'
-        })
+    // Optimistic local stock deduction so the UI reflects reality offline.
+    // Credit sales are EXCLUDED: stock only moves when the operator clicks
+    // Finalize after admin approval (the server guards sold-out with a 409).
+    if (input.payment_method !== 'credit') {
+      for (const i of cart.items) {
+        if (i.kind === 'part') {
+          await db.products.where('id').equals(i.id).modify((p: Product) => {
+            p.stock_qty = Math.max(0, p.stock_qty - i.qty)
+          })
+        } else {
+          await db.bikes.where('id').equals(i.id).modify((b: Bike) => {
+            b.status = 'sold'
+          })
+        }
       }
     }
 
@@ -223,6 +342,57 @@ export default function POSScreen() {
 
         <div className="ml-auto flex items-center gap-3 text-xs text-slate-400">
           <span>Today: <span className="text-white font-semibold">{todayStats.count}</span> sales · <span className="text-brand-300 font-semibold">{ugx(todayStats.revenue)}</span></span>
+          {push.state !== 'subscribed' && push.state !== 'unsupported' && (
+            <button
+              className="btn-ghost text-xs"
+              disabled={push.busy}
+              title={
+                push.state === 'denied'
+                  ? 'Notifications are blocked in the browser — allow them via the address-bar lock icon, then retry'
+                  : 'Get an OS notification the moment the admin approves or rejects your credit sales'
+              }
+              onClick={() => {
+                void push.enable().then((ok) => {
+                  if (ok) setFlash('Alerts on — you’ll be pinged the moment a credit sale is approved')
+                })
+              }}
+            >
+              {push.busy ? 'Enabling…' : push.state === 'denied' ? 'Alerts blocked' : 'Enable alerts'}
+            </button>
+          )}
+          <button
+            className="btn-ghost text-xs relative"
+            onClick={() => setShowCredit(true)}
+            title={
+              creditBadge.approved > 0
+                ? `${creditBadge.approved} approved — ready to finalize`
+                : creditBadge.rejected > 0
+                  ? `${creditBadge.rejected} rejected — confirm receipt in the Credit desk`
+                  : creditBadge.awaiting > 0
+                    ? `${creditBadge.awaiting} credit sale(s) awaiting approval`
+                    : 'Credit desk — queue, finalize & settlements'
+            }
+          >
+            Credit
+            {(creditBadge.approved > 0 || creditBadge.rejected > 0 || creditBadge.awaiting > 0) && (
+              <span
+                className={cn(
+                  'absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 flex items-center justify-center text-[9px] font-bold text-white rounded-full ring-1 ring-slate-800',
+                  creditBadge.approved > 0
+                    ? 'bg-brand-500'
+                    : creditBadge.rejected > 0
+                      ? 'bg-red-500'
+                      : 'bg-amber-500',
+                )}
+              >
+                {creditBadge.approved > 0
+                  ? creditBadge.approved
+                  : creditBadge.rejected > 0
+                    ? creditBadge.rejected
+                    : creditBadge.awaiting}
+              </span>
+            )}
+          </button>
           <button className="btn-ghost text-xs" onClick={() => setShowHistory(true)}>History</button>
           <button className="btn-ghost text-xs" onClick={() => void runSyncCycle('manual')} disabled={sync.syncing}>
             {sync.syncing ? 'Syncing…' : 'Sync now'}
@@ -252,12 +422,35 @@ export default function POSScreen() {
               </button>
             </div>
           </div>
-          <input
-            className="input"
-            placeholder="Search name / SKU / VIN — or just scan a barcode…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+          <div className="flex gap-2">
+            <input
+              className="input flex-1 min-w-0"
+              placeholder="Search name / SKU / VIN — or just scan a barcode…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {/* Test-scan box: dispatches through the exact same handler as the
+                physical scanner, so the flow is testable with a keyboard. */}
+            <form
+              className="flex gap-1.5 shrink-0"
+              onSubmit={(e) => {
+                e.preventDefault()
+                const code = scanTest.trim()
+                if (!code) return
+                dispatchBarcode(code) // same path a physical scan takes
+                setScanTest('')
+              }}
+            >
+              <input
+                className="input w-44 font-mono text-sm"
+                placeholder="Test scan: barcode…"
+                title="Simulate a barcode scan — same handler as the physical scanner (e.g. 6341727100289)"
+                value={scanTest}
+                onChange={(e) => setScanTest(e.target.value)}
+              />
+              <button type="submit" className="btn-ghost text-xs shrink-0">Scan</button>
+            </form>
+          </div>
 
           {/* Sub-pills refine the I.C.E tab only; the other tabs map to a single database category. */}
           {major === 'ice' && (
@@ -353,7 +546,7 @@ export default function POSScreen() {
           <div className="flex-1 overflow-y-auto p-3 space-y-2">
             {cart.items.length === 0 && (
               <div className="text-center text-sm text-slate-600 py-12">
-                Scan a barcode or tap a product
+                Scan a barcode, use the test-scan box, or tap a product
                 <div className="text-xs mt-2 text-slate-700">Scanner input lands here automatically</div>
               </div>
             )}
@@ -412,6 +605,19 @@ export default function POSScreen() {
         </div>
       )}
 
+      {/* Credit decision toast — tap to open the desk */}
+      {creditNote && (
+        <button
+          className="fixed bottom-16 left-1/2 -translate-x-1/2 max-w-md bg-[#111814] border border-sky-500/40 text-sky-200 text-sm px-4 py-2.5 rounded-xl shadow-lg z-50 text-left"
+          onClick={() => {
+            setShowCredit(true)
+            setCreditNote(null)
+          }}
+        >
+          {creditNote} <span className="underline underline-offset-2">Open Credit →</span>
+        </button>
+      )}
+
       {/* Account popup (logo click) */}
       {showAccount && (
         <div className="fixed inset-0 z-50 flex items-start justify-center p-4" onClick={() => setShowAccount(false)}>
@@ -420,6 +626,17 @@ export default function POSScreen() {
             <img src="/logo.png" alt="Spiro" className="h-12 w-12 object-contain mx-auto" />
             <div className="text-sm font-semibold text-white mt-2">{user.full_name}</div>
             <div className="text-[11px] text-slate-500">{getDeviceId()}</div>
+            <div className="text-[11px] text-slate-500 mt-1">
+              Alerts:{' '}
+              {push.state === 'subscribed'
+                ? '✓ on — credit decisions arrive as notifications'
+                : push.state === 'denied'
+                  ? 'blocked in browser settings'
+                  : push.state === 'unsupported'
+                    ? 'not supported on this device'
+                    : 'off'}
+            </div>
+            {push.error && <div className="text-[11px] text-red-400 mt-1">{push.error}</div>}
             <button
               className="btn-danger w-full mt-4"
               onClick={() => { setShowAccount(false); clearSession(); location.reload() }}
@@ -442,6 +659,15 @@ export default function POSScreen() {
       {receipt && <ReceiptModal sale={receipt} onClose={() => setReceipt(null)} />}
 
       {showHistory && <HistoryModal onClose={() => setShowHistory(false)} />}
+
+      {showCredit && (
+        <CreditModal
+          online={sync.online}
+          onClose={() => setShowCredit(false)}
+          onBadge={refreshBadge}
+          onFlash={(msg) => setFlash(msg)}
+        />
+      )}
 
       {showReservations && (
         <ReservationsModal

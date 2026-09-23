@@ -5,6 +5,7 @@ import LoginScreen from './components/LoginScreen'
 import Layout from './components/Layout'
 import OverviewPage from './pages/OverviewPage'
 import SalesPage from './pages/SalesPage'
+import CreditPage from './pages/CreditPage'
 import InventoryPage from './pages/InventoryPage'
 import ReordersPage from './pages/ReordersPage'
 import BikesPage from './pages/BikesPage'
@@ -44,6 +45,7 @@ export default function App() {
         >
           <Route index element={<OverviewPage />} />
           <Route path="sales" element={<SalesPage />} />
+          <Route path="credit" element={<CreditPage />} />
           <Route path="inventory" element={<InventoryPage />} />
           <Route path="purchasing" element={<ReordersPage />} />
           <Route path="bikes" element={<BikesPage />} />

@@ -640,17 +640,31 @@ router.post('/approvals/:id/decide', requireRole(), async (req, res) => {
   const { decision, note } = req.body || {};
   if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ error: 'decision must be approved|rejected' });
 
+  const prior = await one('SELECT type, payload FROM approvals WHERE id = $1', [req.params.id]);
+
+  // Credit-sale decisions run through the credit service: the approval row and
+  // the sale's 'pending_credit' → 'rejected' flip happen in one transaction, and
+  // the sale's cashier is pushed the outcome (approved = go Finalize / rejected
+  // = no charge). An approved sale stays pending_credit — stock, revenue and
+  // debt only appear when the POS operator clicks Finalize.
+  if (prior && prior.type === 'credit_sale') {
+    try {
+      const { decideCreditApproval } = require('../services/credit');
+      const r = await decideCreditApproval(req.params.id, decision, note || null, req.user);
+      return res.json({ approval: r.approval, sale: r.sale });
+    } catch (err) {
+      return res.status(err.status || 500).json({ error: err.message });
+    }
+  }
+
   // Approving a reservation release executes the release first — the decision
   // only lands if the bike actually returns to stock (it may already be gone).
-  if (decision === 'approved') {
-    const prior = await one('SELECT type, payload FROM approvals WHERE id = $1', [req.params.id]);
-    if (prior && prior.type === 'reservation_release') {
-      try {
-        const { releaseReservation } = require('../services/reservations');
-        await releaseReservation((prior.payload || {}).reservation_id, { note: note || null }, req.user);
-      } catch (err) {
-        return res.status(err.status || 409).json({ error: `Release failed: ${err.message}` });
-      }
+  if (decision === 'approved' && prior && prior.type === 'reservation_release') {
+    try {
+      const { releaseReservation } = require('../services/reservations');
+      await releaseReservation((prior.payload || {}).reservation_id, { note: note || null }, req.user);
+    } catch (err) {
+      return res.status(err.status || 409).json({ error: `Release failed: ${err.message}` });
     }
   }
 
@@ -662,6 +676,48 @@ router.post('/approvals/:id/decide', requireRole(), async (req, res) => {
   if (!rec) return res.status(400).json({ error: 'Approval not found or already decided' });
   await audit({ userId: req.user.id, action: `approval_${decision}`, entity: 'approval', entityId: rec.id, newValue: rec });
   res.json({ approval: rec });
+});
+
+// ---------- Credit ledger (admin): pending, outstanding debt, settled ----------
+router.get('/credit/sales', requireRole(), async (req, res) => {
+  try {
+    const { listCreditLedger } = require('../services/credit');
+    // Search: customer name/phone or receipt (q) + sale-date range (from/to).
+    const sales = await listCreditLedger(req.query.view || 'outstanding', {
+      q: req.query.q || '',
+      from: req.query.from || null,
+      to: req.query.to || null,
+    });
+    res.json({ sales });
+  } catch (err) {
+    console.error('[admin/credit]', err);
+    res.status(500).json({ error: 'Failed to load credit ledger' });
+  }
+});
+
+// Receive a payment against a finalized credit sale (back-office).
+// Idempotent on client_txn_id when the client sends one; generated otherwise.
+router.post('/sales/:id/credit-payments', requireRole('manager'), async (req, res) => {
+  try {
+    const { amount, payment_method, note, client_txn_id } = req.body || {};
+    const { recordPayment } = require('../services/credit');
+    const result = await recordPayment(
+      {
+        saleId: req.params.id,
+        amount,
+        payment_method,
+        note,
+        device_id: (req.body || {}).device_id || null,
+        client_txn_id: client_txn_id || `adm-${crypto.randomUUID()}`,
+      },
+      req.user
+    );
+    res.status(result.duplicate ? 200 : 201).json({ ok: true, ...result });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[admin/credit payment]', err);
+    res.status(500).json({ error: 'Failed to record payment' });
+  }
 });
 
 // ---------- DEV ONLY: wipe all transactional + demo data ----------
@@ -676,8 +732,8 @@ router.post('/dev/wipe', requireRole(), async (req, res) => {
   try {
     // Quote identifiers — TRUNCATE takes a list, not parameters.
     await query(
-      `TRUNCATE audit_log, push_subscriptions, stock_movements, sale_items, sales,
-              approvals, customer_bikes, activation_codes
+      `TRUNCATE audit_log, push_subscriptions, stock_movements, sale_items,
+              credit_payments, sales, approvals, customer_bikes, activation_codes
        RESTART IDENTITY CASCADE`
     );
 
