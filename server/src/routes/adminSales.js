@@ -39,7 +39,10 @@ router.get('/', async (req, res) => {
   const sales = await many(
     `SELECT s.id, s.receipt_no, s.subtotal, s.discount, s.total, s.profit, s.payment_method,
             s.status, s.device_id, s.client_txn_id, s.created_at,
-            u.full_name AS cashier_name, c.full_name AS customer_name
+            u.full_name AS cashier_name, c.full_name AS customer_name,
+            (SELECT a.status FROM approvals a
+              WHERE a.type = 'credit_sale' AND a.payload->>'sale_id' = s.id::text
+              ORDER BY a.created_at DESC LIMIT 1) AS approval_status
        FROM sales s
        LEFT JOIN users u ON u.id = s.cashier_id
        LEFT JOIN customers c ON c.id = s.customer_id

@@ -57,10 +57,35 @@ export interface BikeMini {
   status: string
 }
 
-export type Role = 'admin' | 'manager' | 'cashier' | 'mechanic'
+/**
+ * Dashboard roles. Mirrors the server catalog (`server/src/permissions/catalog.js`):
+ * `cashier` (pre-rename) and `mechanic` (removed) are normalized to `operator`
+ * server-side, so they must never be written again.
+ */
+export type Role = 'admin' | 'manager' | 'operator'
 
-/** Extra POS capabilities that can be granted on an activation code */
-export type PosPermission = 'inventory_entry'
+/**
+ * Extra POS capabilities that can be granted on an activation code / to a user,
+ * beyond what their role already holds. Ids are the *grantable* entries of the
+ * server catalog — the admin can tick these to let one trusted operator do
+ * manager-only work (receiving, reservations, installments) without promoting
+ * them. `inventory_entry` is the legacy alias stored on older rows; the server
+ * expands it to inventory_receive + reorder_manage. `product_create` was
+ * folded into inventory_receive (receiving is all-or-nothing) and is dropped
+ * from stored grants on the next save.
+ */
+export type PosPermission =
+  | 'inventory_entry' // legacy alias — expands to the two stock grants below
+  | 'inventory_receive'
+  | 'reorder_create'
+  | 'reorder_manage'
+  | 'credit_request'
+  | 'credit_finalize'
+  | 'credit_settle'
+  | 'installment_collect'
+  | 'reservation_create'
+  | 'reservation_complete'
+  | 'reservation_release'
 
 export interface User {
   id: string
@@ -145,6 +170,8 @@ export interface Sale {
   client_txn_id?: string
   bike_vin?: string | null
   bike_model?: string | null
+  /** Latest credit-sale decision ('approved' | 'rejected'), when any — used for the Approved/Rejected pills. */
+  approval_status?: 'approved' | 'rejected' | null
 }
 
 export interface CustomerBikeLink {
@@ -255,6 +282,46 @@ export interface CreditLedgerSale {
   items: CreditLedgerItem[]
 }
 
+export interface ReservationToday {
+  new_count: number
+  new_down_payments: number
+  payments_count: number
+  payments_amount: number
+  collected_today: number
+  completed_count: number
+  new_today: {
+    id: string
+    down_payment: string | number
+    total_price: string | number
+    balance: string | number
+    plan_months: number
+    reserved_at: string
+    customer_name: string
+    phone: string | null
+    model: string
+    vin: string
+    reserved_by_name: string | null
+  }[]
+  payments_today: {
+    id: string
+    reservation_id: string
+    amount: string | number
+    payment_method: string
+    created_at: string
+    customer_name: string
+    model: string
+    vin: string
+  }[]
+  completed_today: {
+    id: string
+    total_price: string | number
+    completed_at: string
+    customer_name: string
+    model: string
+    vin: string
+  }[]
+}
+
 export interface TodayReport {
   today: {
     sales_count: number
@@ -271,6 +338,9 @@ export interface TodayReport {
     settlement_revenue: number
     settlement_profit: number
   }
+  // Option B accounting: reservation money is isolated here — never folded
+  // into revenue/profit above (a reservation is not a sale yet).
+  reservations: ReservationToday
   payments: { payment_method: string; amount: string | number; n: number }[]
   items: { kind: string; amount: string | number; qty: string | number }[]
 }

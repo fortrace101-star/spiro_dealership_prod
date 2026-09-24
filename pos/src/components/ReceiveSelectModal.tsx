@@ -1,26 +1,129 @@
 import { useEffect, useState } from 'react'
 import { api, type PurchasingRecord } from '../lib/api'
-import { ugx, dateTime } from '../lib/format'
-import { printHtml, escapeHtml } from '../lib/print'
+import { dateOnly, dateTime, ugx } from '../lib/format'
+import { PdfWriter } from '../lib/pdf'
 
-/** Renders the selected reorder list into a printable PDF document. */
-function printList(r: PurchasingRecord): void {
-  const rows = r.items
-    .map((i, idx) => {
-      const unit = Number(i.unit_cost) || 0
-      const isNew = (i as { new_product?: unknown }).new_product
-      return `<tr><td>${escapeHtml(i.sku || '')}</td><td>${escapeHtml(i.name || '')}${isNew ? ' <em>(new)</em>' : ''}</td><td class="num">${i.qty}</td><td class="num">${unit ? ugx(unit) : ''}</td><td class="num">${ugx(i.qty * unit)}</td></tr>`
-    })
-    .join('')
-  const totalQty = r.items.reduce((s, i) => s + i.qty, 0)
+/** Renders a displayed reorder list into a real PDF file and saves it straight
+ *  to Downloads - one click, no print dialog, no new tab (lib/pdf.ts pipeline,
+ *  the same writer the admin app uses). */
+async function downloadList(r: PurchasingRecord, loadedRecords: PurchasingRecord[]): Promise<void> {
   const title = r.title || r.reference || 'Reorder list'
-  printHtml(
-    title,
-    `<h1>${escapeHtml(title)}</h1>
-<div class="meta">Reorder list${r.status ? ` · ${escapeHtml(r.status)}` : ''}${r.supplier ? ` · Supplier: ${escapeHtml(r.supplier)}` : ''} · created ${escapeHtml(dateTime(r.created_at))}${r.notes ? ` · ${escapeHtml(r.notes)}` : ''}</div>
-<table><thead><tr><th>SKU</th><th>Product</th><th class="num">Qty</th><th class="num">Unit cost</th><th class="num">Line total</th></tr></thead>
-<tbody>${rows}</tbody><tfoot><tr><td colspan="2">Total (${r.items.length} line${r.items.length === 1 ? '' : 's'}, qty ${totalQty})</td><td colspan="3" class="num">${r.items_total != null ? ugx(r.items_total) : ''}</td></tr></tfoot></table>`,
-  )
+  const meta = [
+    'Reorder list',
+    `prepared by ${r.created_by_name || '—'}`,
+    dateTime(r.created_at),
+    r.notes ? `Notes: ${r.notes}` : '',
+    r.supplier ? `Supplier: ${r.supplier}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  const rows = r.items.map((i) => {
+    const unit = Number(i.unit_cost) || 0
+    const qty = Number(i.qty) || 0
+    return [i.sku || '', `${i.name || ''}${i.new_product ? ' (new)' : ''}`, String(qty), ugx(unit), ugx(qty * unit)]
+  })
+
+  const value = r.items.reduce((s, i) => s + Number(i.qty) * (Number(i.unit_cost) || 0), 0)
+  const totals: string[][] = [[`Total (${r.items.length} line${r.items.length === 1 ? '' : 's'})`, '', '', '', ugx(value)]]
+
+  // The house filename needs this list's sequence among every reorder list
+  // issued that Kampala day, so refetch the full list first and fall back to the
+  // rows already on screen when that request fails (offline terminal).
+  let dayRecords = loadedRecords
+  try {
+    dayRecords = (await api.reorders()).records
+  } catch {
+    /* offline: the loaded rows still produce a valid sequence number */
+  }
+
+  new PdfWriter(title)
+    .heading(meta)
+    .table({
+      columns: [
+        { label: 'SKU', width: 26 },
+        { label: 'Product' },
+        { label: 'Qty', align: 'right', width: 16 },
+        { label: 'Unit cost', align: 'right', width: 42 },
+        { label: 'Line total', align: 'right', width: 42 },
+      ],
+      rows,
+      totals,
+    })
+    .save(reorderFilename(r.created_at, dayCounter(dayRecords, r)))
+}
+
+/** Calendar parts (day/month/year) of a timestamp in the shop's timezone
+ *  (Africa/Kampala); defaults to now when the timestamp is missing. */
+function kampalaParts(iso: string | null | undefined): { day: string; month: string; year: string } {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit', month: 'numeric', year: 'numeric', timeZone: 'Africa/Kampala',
+  }).formatToParts(iso ? new Date(iso) : new Date())
+  const get = (t: string) => parts.find((p) => p.type === t)?.value || ''
+  return { day: get('day'), month: get('month'), year: get('year') }
+}
+
+// Fixed month table (not the locale) so abbreviations match in every browser/OS.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** House standard for reorder-list downloads:
+ *  "reorder - 21 Sep - 01 - 2026.pdf" - dd mmm from the issuance date, NN the
+ *  1-based sequence of the list among that Kampala day's reorder lists, yyyy
+ *  the issuance year (identical to the admin app's filename). */
+function reorderFilename(createdAt: string | null | undefined, counter: string): string {
+  const { day, month, year } = kampalaParts(createdAt)
+  return `reorder - ${day} ${MONTHS[Number(month) - 1]} - ${counter} - ${year}.pdf`
+}
+
+/** 1-based, zero-padded sequence of `target` among the reorder lists issued on
+ *  the same Kampala calendar day, ordered by creation time ("01", "02", ...). */
+function dayCounter(records: PurchasingRecord[], target: PurchasingRecord): string {
+  const key = (iso: string) => {
+    const p = kampalaParts(iso)
+    return `${p.year}-${p.month}-${p.day}`
+  }
+  const sameDay = records
+    .filter((r) => key(r.created_at) === key(target.created_at))
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+  const idx = sameDay.findIndex((r) => r.id === target.id)
+  // The modal always opens from a loaded row, so a missing id shouldn't happen;
+  // treat it as the next slot so the file still gets a valid number.
+  return String((idx === -1 ? sameDay.length : idx) + 1).padStart(2, '0')
+}
+
+/** Builds the chat-friendly clipboard rendition for the Copy button: product
+ *  names and quantities only, footed by the item count and the list's date -
+ *  no SKUs, no values, so it pastes cleanly into a chat. */
+function reorderListText(r: PurchasingRecord): string {
+  const lines = r.items.map((i) => `${i.name || ''} × ${(Number(i.qty) || 0).toLocaleString('en-UG')}`)
+  return [...lines, '', `Items: ${r.items.length}`, `Date: ${dateOnly(r.created_at)}`].join('\n')
+}
+
+/** Clipboard write with a legacy fallback: navigator.clipboard only exists in
+ *  secure contexts, so a plain-HTTP LAN deployment goes through execCommand. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    // fall through to the legacy path
+  }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch {
+    return false
+  }
 }
 
 interface Props {
@@ -62,6 +165,9 @@ export default function ReceiveSelectModal({ onClose, onSelect, onNew }: Props) 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selected, setSelected] = useState<PurchasingRecord | null>(null)
+  // Id of the list whose Copy just succeeded, so each row shows its own
+  // "Copied ✓" feedback and the button can't be double-fired.
+  const [copiedId, setCopiedId] = useState<string | null>(null)
 
   useEffect(() => {
     ;(async () => {
@@ -119,13 +225,28 @@ export default function ReceiveSelectModal({ onClose, onSelect, onNew }: Props) 
                   </div>
                   {r.supplier && <div className="text-xs text-slate-500 mt-0.5">Supplier: {r.supplier}</div>}
                   {r.items_total != null && <div className="text-xs text-slate-500 mt-0.5">Est. value: {ugx(r.items_total)}</div>}
-                  <div className="flex justify-end mt-2">
+                  <div className="flex justify-end gap-2 mt-2">
                     <button
                       className="btn-ghost text-xs"
-                      onClick={(e) => { e.stopPropagation(); printList(r) }}
-                      title="Print or save this list as PDF"
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        const id = r.id
+                        if (await copyText(reorderListText(r))) {
+                          setCopiedId(id)
+                          window.setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 2000)
+                        }
+                      }}
+                      disabled={copiedId === r.id}
+                      title="Copy the item list for pasting into a chat"
                     >
-                      Print
+                      {copiedId === r.id ? 'Copied ✓' : 'Copy'}
+                    </button>
+                    <button
+                      className="btn-ghost text-xs"
+                      onClick={(e) => { e.stopPropagation(); void downloadList(r, reorders || []) }}
+                      title="Download this list as a PDF file"
+                    >
+                      Download PDF
                     </button>
                   </div>
                 </div>
@@ -186,12 +307,28 @@ export default function ReceiveSelectModal({ onClose, onSelect, onNew }: Props) 
             <div className="flex flex-wrap items-center justify-between gap-2 mt-4 pt-3 border-t border-slate-800">
               <StatusBadge status={selected.status} />
               <div className="flex justify-end gap-2">
+                {/* Copy is list-specific: the text rendition is what gets pasted
+                    into chats when sourcing the items. */}
                 <button
                   className="btn-ghost"
-                  onClick={() => printList(selected)}
-                  title="Print or save this list as PDF"
+                  onClick={async () => {
+                    const id = selected.id
+                    if (await copyText(reorderListText(selected))) {
+                      setCopiedId(id)
+                      window.setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 2000)
+                    }
+                  }}
+                  disabled={copiedId === selected.id}
+                  title="Copy the item list for pasting into a chat"
                 >
-                  Print
+                  {copiedId === selected.id ? 'Copied ✓' : 'Copy'}
+                </button>
+                <button
+                  className="btn-ghost"
+                  onClick={() => void downloadList(selected, reorders || [])}
+                  title="Download this list as a PDF file"
+                >
+                  Download PDF
                 </button>
                 <button className="btn-ghost" onClick={() => setSelected(null)}>Back</button>
                 <button className="btn-primary" onClick={() => onSelect(selected)}>Receive Stock</button>

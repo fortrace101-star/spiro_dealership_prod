@@ -6,7 +6,7 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { compactUgx, dateTime, num, PAYMENT_LABELS, timeAgo, ugx } from '../lib/format'
-import type { Approval, HourlyPoint, Product, Sale, TodayReport } from '../lib/types'
+import type { Approval, HourlyPoint, Product, ReservationToday, Sale, TodayReport } from '../lib/types'
 import { cn } from '../lib/cn'
 import { Badge, EmptyState, KpiCard, PageHeader, Spinner } from '../components/ui'
 import { Modal } from '../components/Modal'
@@ -18,6 +18,7 @@ type CardDetail =
   | { kind: 'sales'; title: string; subtitle: string; sales: Sale[]; showStatus?: boolean }
   | { kind: 'lowstock'; products: Product[] }
   | { kind: 'approvals'; approvals: Approval[] }
+  | { kind: 'reservations'; data: ReservationToday }
 
 export default function OverviewPage() {
   const navigate = useNavigate()
@@ -72,8 +73,13 @@ export default function OverviewPage() {
     openSales({ days: 1, title: 'Gross profit details', subtitle: 'Profit per transaction (selling price − cost)' })
   const openBikes = () =>
     openSales({ days: 1, title: 'Bikes sold today', subtitle: 'Transactions that included a bike (matched by VIN)' })
-  const openAvg = () =>
-    openSales({ days: 1, title: 'Transaction size breakdown', subtitle: 'Every sale today, largest first' })
+
+  // Bike reservations card — aggregates + day lists come straight from /today,
+  // so the drawer always mirrors the card exactly (same 5s refresh).
+  const openReservations = () => {
+    if (!today) return
+    setDetail({ kind: 'reservations', data: today.reservations })
+  }
 
   async function openLowStock() {
     setDetail({ kind: 'loading' })
@@ -141,10 +147,10 @@ export default function OverviewPage() {
           onClick={openBikes}
         />
         <KpiCard
-          label="Avg Transaction"
-          value={ugx(t.avg_transaction)}
-          delta={`${ugx(t.discounts)} discounts given`}
-          onClick={openAvg}
+          label="Bike Reservations"
+          value={ugx(today.reservations.collected_today)}
+          delta={`${today.reservations.new_count} new · ${today.reservations.payments_count} payment${today.reservations.payments_count === 1 ? '' : 's'}${today.reservations.completed_count ? ` · ${today.reservations.completed_count} completed` : ''}`}
+          onClick={openReservations}
         />
       </div>
 
@@ -361,6 +367,99 @@ export default function OverviewPage() {
               <p className="text-xs text-slate-500">Review and decide these in the Approvals page.</p>
             </div>
           )}
+        </Modal>
+      )}
+
+      {detail?.kind === 'reservations' && (
+        <Modal title="Bike reservations today" onClose={() => setDetail(null)} wide>
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="rounded-xl border border-slate-800/70 p-3">
+              <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Collected today</div>
+              <div className="text-lg font-bold text-white tabular-nums mt-1">{ugx(detail.data.collected_today)}</div>
+            </div>
+            <div className="rounded-xl border border-slate-800/70 p-3">
+              <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">New reservations</div>
+              <div className="text-lg font-bold text-white tabular-nums mt-1">{detail.data.new_count}</div>
+            </div>
+            <div className="rounded-xl border border-slate-800/70 p-3">
+              <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Payments received</div>
+              <div className="text-lg font-bold text-white tabular-nums mt-1">{detail.data.payments_count}</div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">
+                New reservations today ({detail.data.new_today.length})
+              </div>
+              {detail.data.new_today.length === 0 ? (
+                <p className="text-xs text-slate-600">No new reservations today.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {detail.data.new_today.map((r) => (
+                    <div key={r.id} className="rounded-lg bg-[#0b0e13] border border-slate-800/60 px-3 py-2 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm text-white truncate">{r.customer_name}{r.phone ? ` · ${r.phone}` : ''}</div>
+                        <div className="text-[11px] font-mono text-slate-500">{r.model} · {r.vin}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-sm font-semibold text-white">{ugx(r.down_payment)} down</div>
+                        <div className="text-[11px] text-slate-500">{r.plan_months ? `${r.plan_months} mo · ` : ''}{ugx(r.balance)} balance · {timeAgo(r.reserved_at)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">
+                Payments on reserved bikes today ({detail.data.payments_today.length})
+              </div>
+              {detail.data.payments_today.length === 0 ? (
+                <p className="text-xs text-slate-600">No reservation payments today.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {detail.data.payments_today.map((p) => (
+                    <div key={p.id} className="rounded-lg bg-[#0b0e13] border border-slate-800/60 px-3 py-2 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm text-white truncate">{p.customer_name}</div>
+                        <div className="text-[11px] font-mono text-slate-500">{p.model} · {p.vin}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-sm font-semibold text-white">{ugx(p.amount)}</div>
+                        <div className="text-[11px] text-slate-500">{PAYMENT_LABELS[p.payment_method] || p.payment_method} · {timeAgo(p.created_at)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {detail.data.completed_today.length > 0 && (
+              <div>
+                <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">
+                  Completed today ({detail.data.completed_today.length})
+                </div>
+                <div className="space-y-1.5">
+                  {detail.data.completed_today.map((r) => (
+                    <div key={r.id} className="rounded-lg bg-[#0b0e13] border border-emerald-900/60 px-3 py-2 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm text-white truncate">{r.customer_name}</div>
+                        <div className="text-[11px] font-mono text-slate-500">{r.model} · {r.vin}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-sm font-semibold text-emerald-300">{ugx(r.total_price)}</div>
+                        <div className="text-[11px] text-slate-500">completed {timeAgo(r.completed_at)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <p className="text-xs text-slate-500">Reservation money is not counted in Revenue until the bike is sold — full management lives on the Reservations page.</p>
+          </div>
         </Modal>
       )}
     </div>

@@ -7,7 +7,10 @@ async function requireAuth(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Missing token' });
 
   const user = await getUserFromToken(token);
-  if (!user || !user.is_active) return res.status(401).json({ error: 'Invalid or expired token' });
+  if (!user) return res.status(401).json({ error: 'Session expired — sign in again' });
+  // Distinct message so the POS can tell "you were deactivated" apart from an
+  // expired token when it drops the operator back on the sign-in screen.
+  if (!user.is_active) return res.status(401).json({ error: 'POS access deactivated — contact the administrator' });
 
   req.user = user;
   next();

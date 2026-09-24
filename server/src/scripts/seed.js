@@ -5,6 +5,12 @@
  * Safe to re-run: wipes and recreates demo rows.
  */
 require('dotenv').config();
+// Demo rows are for development only — never write them into a production
+// install. Production gets its first administrator via first-time setup.
+if (process.env.NODE_ENV === 'production') {
+  console.error('Refusing to seed: NODE_ENV=production. Create the first administrator via first-time setup instead.');
+  process.exit(1);
+}
 const { pool, one, many, initSchema } = require('../db');
 const { hashPassword } = require('../auth');
 
@@ -52,20 +58,20 @@ async function main() {
   );
   const cashier1 = await one(
     `INSERT INTO users (full_name, email, phone, password_hash, role)
-     VALUES ($1,$2,$3,$4,'cashier') RETURNING *`,
+     VALUES ($1,$2,$3,$4,'operator') RETURNING *`,
     ['Grace Amina', 'grace@spiro.demo', '+256700000003', await hashPassword('cashier123')]
   );
   const cashier2 = await one(
     `INSERT INTO users (full_name, email, phone, password_hash, role) 
-     VALUES ($1,$2,$3,$4,'cashier') RETURNING *`,
+     VALUES ($1,$2,$3,$4,'operator') RETURNING *`,
     ['Peter Mugisha', 'peter@spiro.demo', '+256700000004', await hashPassword('cashier123')]
   );
   console.log('  ✓ staff: manager@spiro.demo/manager123, grace@spiro.demo/cashier123, peter@spiro.demo/cashier123');
 
   // ---- Activation codes ----
   for (const c of [
-    { code: 'SPIRO-DEMO1', label: 'Demo counter 1', role: 'cashier' },
-    { code: 'SPIRO-DEMO2', label: 'Demo counter 2', role: 'cashier' },
+    { code: 'SPIRO-DEMO1', label: 'Demo counter 1', role: 'operator' },
+    { code: 'SPIRO-DEMO2', label: 'Demo counter 2', role: 'operator' },
     { code: 'SPIRO-MGR1', label: 'Demo manager', role: 'manager' },
   ]) {
     await one(

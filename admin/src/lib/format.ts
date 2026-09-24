@@ -58,4 +58,5 @@ export const PAYMENT_LABELS: Record<string, string> = {
   bank: 'Bank',
   card: 'Card',
   credit: 'Credit',
+  credit_settlement: 'Credit Settlement',
 }

@@ -36,6 +36,19 @@ export class ApiError extends Error {
   }
 }
 
+/** Row of the durable cross-app inbox (shared with the POS). */
+export interface AppNotification {
+  id: string
+  kind: string
+  title: string
+  body: string
+  url: string | null
+  tag: string | null
+  payload: Record<string, unknown>
+  read_at: string | null
+  created_at: string
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken()
   const res = await fetch(`${API_URL}${path}`, {
@@ -63,10 +76,23 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 export const api = {
   // auth
   login: (email: string, password: string) =>
-    request<{ token: string; user: User }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+    request<{ token: string; user: User; unread_count?: number; notifications?: AppNotification[] }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   me: () => request<{ user: User }>('/api/auth/me'),
+  // first-launch setup — a fresh (or just-wiped) install has no users yet
+  setupStatus: () => request<{ setup_required: boolean }>('/api/setup/status'),
+  setupComplete: (input: { code: string; full_name: string; email: string; password: string }) =>
+    request<{ token: string; user: User; unread_count?: number; notifications?: AppNotification[] }>('/api/setup/complete', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   changePassword: (current: string, next: string) =>
     request<{ ok: boolean }>('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ current, next }) }),
+
+  // notifications — durable inbox shared with the POS (per-user rows)
+  notifications: () => request<{ notifications: AppNotification[]; unread_count: number }>('/api/notifications'),
+  unreadCount: () => request<{ unread_count: number }>('/api/notifications/unread-count'),
+  markNotificationRead: (id: string) => request<{ ok: boolean }>(`/api/notifications/${id}/read`, { method: 'POST' }),
+  markAllNotificationsRead: () => request<{ ok: boolean }>('/api/notifications/read-all', { method: 'POST' }),
 
   // reports — window helpers accept preset days OR explicit from/to ISO dates
   today: () => request<TodayReport>('/api/reports/today'),
@@ -143,7 +169,11 @@ export const api = {
   reservation: (id: string) => request<{ reservation: BikeReservation }>(`/api/admin/reservations/${id}`),
   createReservation: (payload: {
     bike_id: string
-    customer_id: string
+    /** Pick ONE of: an existing customer_id, or customer_name + customer_phone
+     *  (the server matches by phone / creates the walk-in customer). */
+    customer_id?: string
+    customer_name?: string
+    customer_phone?: string
     total_price: number
     down_payment: number
     plan_months: number
@@ -226,6 +256,11 @@ export const api = {
   },
   creditPayment: (saleId: string, input: { amount: number; payment_method: string; note?: string; client_txn_id?: string }) =>
     request<{ ok: boolean; duplicate?: boolean }>(`/api/admin/sales/${saleId}/credit-payments`, { method: 'POST', body: JSON.stringify(input) }),
+  // One-click Approve & Finalize from the credit desk: decides a still-pending
+  // approval server-side, then runs the same finalize service the POS uses
+  // (stock guards + idempotency stay identical to the operator's Finalize).
+  approveFinalizeCredit: (saleId: string) =>
+    request<{ ok: boolean; approved: boolean; duplicate: boolean }>(`/api/admin/credit-sales/${saleId}/approve-finalize`, { method: 'POST', body: JSON.stringify({}) }),
   audit: () => request<{ entries: AuditEntry[] }>('/api/admin/audit'),
 
   // push

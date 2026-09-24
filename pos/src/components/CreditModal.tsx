@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, getDeviceId } from '../lib/api'
+import { api, can, getDeviceId } from '../lib/api'
 import { ugx } from '../lib/format'
 import { PAYMENT_LABELS, type CreditOutstandingSale, type CreditPendingSale } from '../lib/types'
 import { uuid } from '../db/uuid'
@@ -48,6 +48,10 @@ export function creditBadgeCounts(rows: CreditPendingSale[]) {
  * dissolves the debt (the debt itself is never revenue). Actions are online-only.
  */
 export default function CreditModal({ online, onClose, onBadge, onFlash }: Props) {
+  // Hide-not-disable: Finalize needs `credit_finalize`, settlements need
+  // `credit_settle` — the server 403s either way, so the POS doesn't offer them.
+  const canFinalize = can('credit_finalize')
+  const canSettle = can('credit_settle')
   const [pending, setPending] = useState<CreditPendingSale[] | null>(null)
   const [outstanding, setOutstanding] = useState<CreditOutstandingSale[] | null>(null)
   const [q, setQ] = useState('')
@@ -190,7 +194,7 @@ export default function CreditModal({ online, onClose, onBadge, onFlash }: Props
         {pending === null ? (
           <div className="text-sm text-slate-600 mb-6">Loading…</div>
         ) : pending.length === 0 ? (
-          <div className="text-sm text-slate-600 mb-6">No credit sales in flight. 🎉</div>
+          <div className="text-sm text-slate-600 mb-6">No credit sales in flight. </div>
         ) : (
           <div className="space-y-2 mb-6">
             {pending.map((s) => (
@@ -217,7 +221,7 @@ export default function CreditModal({ online, onClose, onBadge, onFlash }: Props
                 )}
                 <div className="flex items-center justify-between mt-2">
                   {statusPill(s)}
-                  {s.approval_status === 'approved' && (
+                  {s.approval_status === 'approved' && canFinalize && (
                     <button
                       className="btn-primary text-xs px-3 py-1.5"
                       disabled={!online || busyId === s.id}
@@ -324,7 +328,7 @@ export default function CreditModal({ online, onClose, onBadge, onFlash }: Props
                       </button>
                     </div>
                   </form>
-                ) : (
+                ) : canSettle ? (
                   <div className="flex justify-end mt-2">
                     <button
                       className="btn-ghost text-xs"
@@ -339,7 +343,7 @@ export default function CreditModal({ online, onClose, onBadge, onFlash }: Props
                       Receive payment
                     </button>
                   </div>
-                )}
+                ) : null}
               </div>
             ))}
           </div>

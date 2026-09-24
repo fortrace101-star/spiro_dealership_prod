@@ -98,6 +98,55 @@ router.get('/today', async (req, res) => {
       WHERE si.kind='bike' AND s.created_at >= date_trunc('day', now())`
   );
 
+  // ---------- Bike reservations today ----------
+  // Option B accounting: reservation money is tracked here in isolation — a
+  // reservation is NOT a sale (the bike is still inventory), so none of these
+  // numbers feed revenue/profit above. `collected_today` = down payments of
+  // bikes reserved today + every installment payment received today.
+  const resNew = await one(
+    `SELECT count(*)::int AS n, COALESCE(sum(down_payment),0) AS down
+       FROM bike_reservations
+      WHERE reserved_at >= date_trunc('day', now())`
+  );
+  const resPays = await one(
+    `SELECT count(*)::int AS n, COALESCE(sum(amount),0) AS amount
+       FROM bike_installment_payments
+      WHERE created_at >= date_trunc('day', now())`
+  );
+  const resDone = await one(
+    `SELECT count(*)::int AS n FROM bike_reservations
+      WHERE status = 'completed' AND completed_at >= date_trunc('day', now())`
+  );
+  const resNewList = await many(
+    `SELECT r.id, r.down_payment, r.total_price, r.balance, r.plan_months, r.reserved_at,
+            c.full_name AS customer_name, c.phone, b.model, b.vin, u.full_name AS reserved_by_name
+       FROM bike_reservations r
+       JOIN customers c ON c.id = r.customer_id
+       JOIN bikes b ON b.id = r.bike_id
+       LEFT JOIN users u ON u.id = r.reserved_by
+      WHERE r.reserved_at >= date_trunc('day', now())
+      ORDER BY r.reserved_at DESC LIMIT 200`
+  );
+  const resPayList = await many(
+    `SELECT p.id, p.amount, p.payment_method, p.created_at, p.reservation_id,
+            c.full_name AS customer_name, b.model, b.vin
+       FROM bike_installment_payments p
+       JOIN bike_reservations r ON r.id = p.reservation_id
+       JOIN customers c ON c.id = r.customer_id
+       JOIN bikes b ON b.id = r.bike_id
+      WHERE p.created_at >= date_trunc('day', now())
+      ORDER BY p.created_at DESC LIMIT 200`
+  );
+  const resDoneList = await many(
+    `SELECT r.id, r.total_price, r.completed_at,
+            c.full_name AS customer_name, b.model, b.vin
+       FROM bike_reservations r
+       JOIN customers c ON c.id = r.customer_id
+       JOIN bikes b ON b.id = r.bike_id
+      WHERE r.status = 'completed' AND r.completed_at >= date_trunc('day', now())
+      ORDER BY r.completed_at DESC LIMIT 200`
+  );
+
   res.json({
     today: {
       sales_count: Number(sales.sales_count),
@@ -113,6 +162,17 @@ router.get('/today', async (req, res) => {
       credit_pending: Number(creditPending?.n || 0),
       settlement_revenue: Number(settlement.revenue),
       settlement_profit: Number(settlement.profit),
+    },
+    reservations: {
+      new_count: Number(resNew?.n || 0),
+      new_down_payments: Number(resNew?.down || 0),
+      payments_count: Number(resPays?.n || 0),
+      payments_amount: Number(resPays?.amount || 0),
+      collected_today: Number(resNew?.down || 0) + Number(resPays?.amount || 0),
+      completed_count: Number(resDone?.n || 0),
+      new_today: resNewList,
+      payments_today: resPayList,
+      completed_today: resDoneList,
     },
     payments,
     items,
@@ -286,7 +346,7 @@ router.get('/cashiers', async (req, res) => {
             COALESCE(sum(s.discount),0) AS discounts
        FROM users u LEFT JOIN sales s ON s.cashier_id = u.id
          AND s.${clause}
-      WHERE u.role IN ('cashier','manager')
+      WHERE u.role IN ('cashier', 'operator', 'manager')
       GROUP BY u.id ORDER BY revenue DESC`, params
   );
   res.json({ cashiers: rows });

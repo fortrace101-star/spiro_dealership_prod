@@ -6,9 +6,9 @@ import { getCustomers } from '../db/repos'
 import type { Customer } from '../lib/types'
 
 interface Props {
-  totals: { subtotal: number; discount: number; total: number }
+  totals: { subtotal: number; total: number }
   onClose: () => void
-  onComplete: (input: { discount: number; payment_method: PaymentMethod; amount_paid: number; customer_name: string | null; customer_phone: string | null }) => void
+  onComplete: (input: { payment_method: PaymentMethod; amount_paid: number; customer_name: string | null; customer_phone: string | null }) => void
 }
 
 const METHODS: PaymentMethod[] = ['cash', 'mobile_money', 'bank', 'card', 'credit']
@@ -20,14 +20,17 @@ export default function CheckoutModal({ totals, onClose, onComplete }: Props) {
   const [registered, setRegistered] = useState(false)
   const [customerId, setCustomerId] = useState<string | null>(null)
   const [customers, setCustomers] = useState<Customer[]>([])
-  const [discountInput, setDiscountInput] = useState(cart.discount ? String(cart.discount) : '')
   const [error, setError] = useState('')
 
   useEffect(() => {
     getCustomers().then(setCustomers).catch(() => setCustomers([]))
   }, [])
 
-  const parsedDiscount = Number(discountInput) || 0
+  // Discounts are admin-only: there is intentionally no discount field on this
+  // screen. The POS always checks out at full price and any hand-crafted payload
+  // carrying a discount is refused server-side, exactly like a credit sale.
+  const finalTotals = useMemo(() => cartTotals(cart.items), [cart.items])
+
   function selectCustomer(id: string | null) {
     setCustomerId(id)
     if (id) {
@@ -38,7 +41,6 @@ export default function CheckoutModal({ totals, onClose, onComplete }: Props) {
       }
     }
   }
-  const finalTotals = useMemo(() => cartTotals(cart.items, parsedDiscount), [cart.items, parsedDiscount])
 
   // Exact-payment checkout: non-credit methods always pay the full total.
   // Down payments / installments are handled by the reservation flow, never here.
@@ -66,8 +68,8 @@ export default function CheckoutModal({ totals, onClose, onComplete }: Props) {
     // buyer as registered (or the sale forces identity: bike / credit). The
     // server links the sale to the customer by phone automatically.
     const track = registered || hasBike || cart.paymentMethod === 'credit'
+    // No discount field and no discount payload: only an admin can issue one.
     onComplete({
-      discount: parsedDiscount,
       payment_method: cart.paymentMethod,
       amount_paid: amountPaidNum,
       customer_name: track ? customerName.trim() || 'Walk-in' : null,
@@ -118,12 +120,6 @@ export default function CheckoutModal({ totals, onClose, onComplete }: Props) {
             <p className="text-[11px] text-slate-600 mt-1.5">Exact payment — no change due. For a down payment / installment plan, use Reserve instead.</p>
           </div>
         )}
-
-        {/* Discount */}
-        <div>
-          <div className="text-xs font-medium text-slate-400 mb-1.5">{'Discount (UGX) — >5% needs manager approval'}</div>
-          <input className="input" type="number" min={0} value={discountInput} onChange={(e) => setDiscountInput(e.target.value)} placeholder="0" />
-        </div>
 
         {/* Customer */}
         <div className="border-t border-slate-800 pt-3 space-y-2">
@@ -190,17 +186,28 @@ export default function CheckoutModal({ totals, onClose, onComplete }: Props) {
           )}
         </div>
 
-        {/* Totals */}
+        {/* Totals — POS always checks out at full price (discount 0). Only an
+            admin can approve and issue discounts, exactly like credit sales,
+            so there is no discount field on this screen. */}
         <div className="border-t border-slate-800 pt-3 space-y-1 text-sm">
           <div className="flex justify-between text-slate-400"><span>Subtotal</span><span>{ugx(finalTotals.subtotal)}</span></div>
-          {parsedDiscount > 0 && <div className="flex justify-between text-amber-300"><span>Discount</span><span>− {ugx(parsedDiscount)}</span></div>}
           <div className="flex justify-between text-xl font-bold text-white pt-1"><span>Total</span><span>{ugx(finalTotals.total)}</span></div>
         </div>
 
         {error && <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{error}</p>}
 
-        <button className="btn-primary w-full text-base" disabled={cart.items.length === 0}>
-          Complete sale · {ugx(finalTotals.total)}
+        <button
+          className={cn2(
+            'btn w-full text-base',
+            // Credit = a request, not a completed sale — orange to signal the
+            // approval step ahead (stock & debt only move after Finalize).
+            cart.paymentMethod === 'credit'
+              ? 'bg-amber-500 text-amber-950 hover:bg-amber-400'
+              : 'bg-brand-500 text-[#06210f] hover:bg-brand-400',
+          )}
+          disabled={cart.items.length === 0}
+        >
+          {cart.paymentMethod === 'credit' ? 'Request Approval' : 'Complete sale'} · {ugx(finalTotals.total)}
         </button>
         {cart.paymentMethod !== 'credit' && (
           <p className="text-[11px] text-slate-600 text-center">

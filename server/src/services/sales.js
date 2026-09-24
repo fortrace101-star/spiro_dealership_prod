@@ -74,6 +74,11 @@ async function recordSale(input, actor) {
     // ---- Totals ----
     const subtotal = Number(input.subtotal || 0);
     const discount = Number(input.discount || 0);
+    // Sum of per-line discounts (used by the discount approval ticket below).
+    // Must live here in the service: routes/pos.js computes its own copy for the
+    // admin-only 403 gate, but /sync/push calls recordSale directly, so queued
+    // offline sales reach this scope without ever passing through the route.
+    const lineDiscount = itemList.reduce((sum, it) => sum + Number(it.discount || 0), 0);
     const total = Number(input.total || 0);
     const costTotal = Number(input.cost_total || 0);
 
@@ -158,22 +163,27 @@ async function recordSale(input, actor) {
       });
     }
 
-    // ---- Discount beyond 5% also requires approval (Phase 1 control) ----
-    if (subtotal > 0 && discount / subtotal > 0.05) {
+    // ---- Discounts: admin-only, always. Every discount (any amount, header or
+    // line level) needs admin approval exactly like a credit sale — the POS
+    // checkout has no discount field and only an admin can issue one, so any
+    // payload carrying a discount opens an approval ticket instead of moving
+    // money. Cashier/manager sales always arrive with discount 0.
+    const discountApprovalNeeded = discount > 0 || lineDiscount > 0;
+    if (discountApprovalNeeded) {
       await client.query(
         `INSERT INTO approvals (type, requested_by, payload, status)
          VALUES ('discount', $1, $2, 'pending')`,
-        [actor.id, JSON.stringify({ sale_id: sale.id, receipt_no: receiptNo, subtotal, discount, pct: +(discount / subtotal * 100).toFixed(1) })]
+        [actor.id, JSON.stringify({ sale_id: sale.id, receipt_no: receiptNo, subtotal, discount: discount + lineDiscount, pct: subtotal > 0 ? +((discount + lineDiscount) / subtotal * 100).toFixed(1) : 0 })]
       );
       approvalPushes.push({
         title: '💰 Discount approval',
-        body: `Receipt ${receiptNo} — ${+(discount / subtotal * 100).toFixed(1)}% discount (UGX ${Number(discount || 0).toLocaleString('en-UG', { maximumFractionDigits: 0 })}) needs manager approval`,
+        body: `Receipt ${receiptNo} — UGX ${Number(discount + lineDiscount || 0).toLocaleString('en-UG', { maximumFractionDigits: 0 })} discount needs admin approval`,
         url: '/approvals',
         tag: 'approval:' + sale.id + ':discount',
         saleId: sale.id,
         receiptNo,
         subtotal,
-        discount,
+        discount: discount + lineDiscount,
       });
     }
 

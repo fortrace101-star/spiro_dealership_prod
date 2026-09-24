@@ -7,6 +7,7 @@ import { Modal } from '../components/Modal'
 import { Field } from './InventoryPage'
 import { cn } from '../lib/cn'
 import { usePageSize } from '../lib/usePageSize'
+import { useAuth } from '../context/AuthContext'
 
 type View = 'outstanding' | 'pending' | 'settled'
 
@@ -115,6 +116,12 @@ export default function CreditPage() {
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const pageSize = usePageSize()
+  const { user } = useAuth()
+  // Approving + finalizing are admin decisions (server: requireRole() with no
+  // roles — same rule as /approvals/:id/decide) — hide the controls otherwise.
+  const canDecide = user?.role === 'admin'
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [actionError, setActionError] = useState('')
 
   const load = useCallback(async () => {
     const r = await api.creditLedger(view, { q, from: from || undefined, to: to || undefined })
@@ -127,6 +134,7 @@ export default function CreditPage() {
     const t = setTimeout(() => {
       setPage(1)
       setDetail(null)
+      setActionError('')
       load().catch(() => setSales([]))
     }, 300)
     return () => clearTimeout(t)
@@ -137,6 +145,24 @@ export default function CreditPage() {
     const fresh = await load().catch(() => null)
     setPaying(null)
     if (detail && fresh) setDetail(fresh.find((s) => s.id === detail.id) || null)
+  }
+
+  // One click: approve (if still pending) + finalize — the back-office twin of
+  // the POS two-step (Approvals.decide → operator's Finalize). Reloads the
+  // ledger and the open drawer so the status pill flips live; 409s (sold out,
+  // rejected, already finalized elsewhere) surface in the banner below.
+  async function approveFinalize(s: CreditLedgerSale) {
+    setBusyId(s.id)
+    setActionError('')
+    try {
+      await api.approveFinalizeCredit(s.id)
+      const fresh = await load().catch(() => null)
+      if (detail && fresh) setDetail(fresh.find((x) => x.id === detail.id) || null)
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Approve & finalize failed')
+    } finally {
+      setBusyId(null)
+    }
   }
 
   const totals = (sales || []).reduce(
@@ -202,6 +228,12 @@ export default function CreditPage() {
         )}
       </div>
 
+      {actionError && (
+        <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2 mb-3">
+          {actionError}
+        </div>
+      )}
+
       <div className="card overflow-hidden">
         {sales === null ? (
           <Spinner />
@@ -241,6 +273,26 @@ export default function CreditPage() {
                     </td>
                     <td className="td">{statusPill(s)}</td>
                     <td className="td text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                      {canDecide && s.status === 'pending_credit' && s.approval_status === 'pending' && (
+                        <button
+                          className="btn-primary text-xs px-2 py-1"
+                          disabled={busyId === s.id}
+                          title="Approve the sale, deduct stock and open the debt"
+                          onClick={() => void approveFinalize(s)}
+                        >
+                          {busyId === s.id ? 'Working…' : 'Approve & Finalize'}
+                        </button>
+                      )}
+                      {canDecide && s.status === 'pending_credit' && s.approval_status === 'approved' && (
+                        <button
+                          className="btn-primary text-xs px-2 py-1 ml-1.5"
+                          disabled={busyId === s.id}
+                          title="Deduct stock and open the debt"
+                          onClick={() => void approveFinalize(s)}
+                        >
+                          {busyId === s.id ? 'Finalizing…' : 'Finalize'}
+                        </button>
+                      )}
                       {canPay(s) && (
                         <button className="btn-ghost text-xs px-2 py-1" onClick={() => setPaying(s)}>Receive</button>
                       )}
@@ -296,6 +348,26 @@ export default function CreditPage() {
             </div>
 
             <div className="mb-4">{statusPill(detail)}</div>
+
+            {/* One-click decision: approve+finalize (still pending) or finalize
+                (already approved) — admin-only, same service path as the POS
+                operator's Finalize click. */}
+            {canDecide && detail.status === 'pending_credit' && (detail.approval_status === 'pending' || detail.approval_status === 'approved') && (
+              <div className="flex justify-end mb-4">
+                <button
+                  className="btn-primary text-sm"
+                  disabled={busyId === detail.id}
+                  title={detail.approval_status === 'pending' ? 'Approve the sale, deduct stock and open the debt' : 'Deduct stock and open the debt'}
+                  onClick={() => void approveFinalize(detail)}
+                >
+                  {busyId === detail.id
+                    ? 'Working…'
+                    : detail.approval_status === 'pending'
+                      ? 'Approve & Finalize'
+                      : 'Finalize'}
+                </button>
+              </div>
+            )}
 
             {/* What was taken on credit — the line items from the POS checkout */}
             <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Items taken</h4>

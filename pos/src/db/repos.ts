@@ -66,7 +66,6 @@ export interface CheckoutInput {
   device_id: string
   customer_name: string | null
   customer_phone: string | null
-  discount: number
   payment_method: LocalSale['payment_method']
   amount_paid: number
   items: Omit<LocalSaleItem, 'sale_id' | 'id'>[]
@@ -75,13 +74,17 @@ export interface CheckoutInput {
 /**
  * Atomic offline sale: sale + items + sync queue entry all commit together,
  * or not at all (per POS.md §19). Returns the stored sale.
+ *
+ * The discount is always 0: discounts are an administrator-only capability, so
+ * the POS checkout prices at full value and the server refuses any payload that
+ * carries one (see server/src/services/sales.js).
  */
 export async function createSale(input: CheckoutInput): Promise<LocalSale> {
   const id = uuid()
   const clientTxnId = `POS-${input.device_id}-${id}`
   const subtotal = input.items.reduce((s, it) => s + it.line_total, 0)
-  const discount = Math.max(0, Math.min(input.discount, subtotal))
-  const total = subtotal - discount
+  const discount = 0
+  const total = subtotal
   const changeDue = input.payment_method === 'credit' ? 0 : Math.max(0, input.amount_paid - total)
 
   const sale: LocalSale = {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, type ProductCategory, type PurchasingItem, type PurchasingProduct, type PurchasingRecord, PRODUCT_CATEGORIES } from '../lib/api'
+import { api, can as canPerm, type ProductCategory, type PurchasingItem, type PurchasingProduct, type PurchasingRecord, PRODUCT_CATEGORIES } from '../lib/api'
 import { uuid } from '../db/uuid'
 import { ugx } from '../lib/format'
 import { cn } from '../lib/cn'
@@ -20,7 +20,12 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
   const [prods, setProds] = useState<PurchasingProduct[] | null>(null)
   // Authoritative capability flag: the catalog response is read from the database on
   // every call, so a permission granted in the console applies without a re-login.
+  // Inline product creation rides on the same grant — receiving is all-or-nothing
+  // (fulfil a list, start a standalone restock, create new SKUs).
   const [can, setCan] = useState(canReceive)
+  // Creating a reorder list is its own grant (`reorder_create`): a manage-only
+  // user sees only the current lists — no drafting section, no Save/Cancel.
+  const [canCreateList, setCanCreateList] = useState(() => canPerm('reorder_create'))
   const [hist, setHist] = useState<PurchasingRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [q, setQ] = useState('')
@@ -53,7 +58,7 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
     void (async () => {
       try {
         const c = await api.purchasingCatalog()
-        if (!dead) { setProds(c.products); setCan(c.can_receive) }
+        if (!dead) { setProds(c.products); setCan(c.can_receive); setCanCreateList(c.can_reorder) }
       } catch (e) { if (!dead) setErr(e instanceof Error ? e.message : 'Load failed') }
       try {
         const h = rx ? await api.consignments() : await api.reorders()
@@ -72,7 +77,7 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
     return () => { dead = true }
   }, [rx])
 
-  /** Move a saved reorder list from pending to processed (from the Saved lists section). */
+  /** Move a saved reorder list from pending to processed (from the Current Reorder Lists section). */
   async function markList(rec: PurchasingRecord, status: 'pending' | 'processed') {
     setErr('')
     try {
@@ -110,6 +115,7 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
     }))])
   }
   function addNew() {
+    if (rx && !can) { setErr('Missing permission: receive stock'); return }
     if (!draft.sku.trim() || !draft.name.trim()) { setErr('New products need SKU and name.'); return }
     // Receive mode needs the purchase price now; a reorder draft may leave it blank.
     const cost = draft.cost.trim() === '' ? (rx ? NaN : 0) : num(draft.cost)
@@ -158,18 +164,97 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
       }
     } catch (e) { setErr(e instanceof Error ? e.message : 'Save failed'); setBusy(false) }
   }
+  // Current reorder lists (reorder mode) / Recent deliveries (receive mode): one shared
+  // panel. In reorder mode it opens the modal - the pending lists are where
+  // the cashier starts (mark one processed, then receive against it); in
+  // receive mode it stays at the bottom as reference while the delivery is
+  // being captured.
+  const historyPanel = (
+    <div className={cn('border-slate-800/70', rx ? 'mt-4 border-t pt-3' : 'mb-4 border-b pb-3')}>
+      {rx && <div className="text-xs font-semibold text-slate-300 mb-2">Recent deliveries</div>}
+      {loading ? <div className="text-xs text-slate-600">Loading</div> : hist.length === 0 ? <div className="text-xs text-slate-600">None yet.</div> : (
+        <div className="space-y-1.5 max-h-64 overflow-y-auto">
+          {(rx ? hist : hist.filter((r) => r.status ? (r.status === 'pending' || r.status === 'processed') : !r.fulfilled)).slice(0, 20).map((r) => {
+            const open = openHist === r.id
+            return (
+              <div key={r.id} className="text-xs text-slate-400 border border-slate-800 rounded-lg px-2.5 py-2">
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between gap-2 text-left"
+                  onClick={() => setOpenHist(open ? null : r.id)}
+                >
+                  <span className="text-white">
+                    {rx ? r.reference : r.title} - {r.items.length} items
+                    {!rx && (r.status === 'processed' ? ' · processed' : ' · pending')}
+                  </span>
+                  <span className={cn('text-slate-600 transition-transform', open && 'rotate-90')}>›</span>
+                </button>
+                {!open && (
+                  <div className="mt-0.5 truncate">{r.items.map((i) => i.name + ' x' + i.qty).join(', ')}</div>
+                )}
+                {!rx && (r.status === 'pending' || !r.status) && (
+                  <div className="mt-1.5">
+                    <button
+                      type="button"
+                      className="text-[11px] px-2.5 py-1 rounded-md bg-emerald-600 text-white font-semibold hover:bg-emerald-500 active:bg-emerald-700 transition shadow-sm"
+                      onClick={() => void markList(r, 'processed')}
+                    >
+                      Mark processed
+                    </button>
+                  </div>
+                )}
+                  {rx && (r.source_list_title || r.source_list_id) && (
+                    <div className="mt-0.5 text-sky-300">Fulfills {r.source_list_title || 'Reorder list'}</div>
+                  )}
+                {open && (
+                  <div className="mt-2 border-t border-slate-800/70 pt-2 space-y-1">
+                    {r.items.map((i, idx) => (
+                      <div key={i.product_id || `n${idx}`} className="flex items-center justify-between gap-2">
+                        <span className="min-w-0 truncate">
+                          <span className="font-mono text-slate-500">{i.sku}</span> {i.name}
+                          {i.new_product && <span className="ml-1 text-[10px] text-sky-400">new</span>}
+                    {rx && (r.source_list_title || r.source_list_id) && (
+                      <div className="text-sky-300">Fulfills {r.source_list_title || 'Reorder list'}</div>
+                    )}
+                        </span>
+                        <span className="text-slate-300 shrink-0">×{i.qty}{rx && i.unit_cost ? ` · ${ugx(Number(i.unit_cost) || 0)}` : ''}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between border-t border-slate-800/70 pt-1 text-slate-500">
+                      <span>Total qty: {r.items.reduce((s, i) => s + i.qty, 0)}</span>
+                      {rx && <span>Items total: {ugx(r.items.reduce((s, i) => s + i.qty * (Number(i.unit_cost) || 0), 0))}</span>}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/70" />
       <div className="relative card w-full max-w-3xl p-5 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
           <div>
-            <h3 className="font-bold text-white text-lg">{rx ? 'Receive consignment' : 'New Reorder List'}</h3>
-            <p className="text-xs text-slate-500">{rx ? 'Stock updates immediately. New products can be created inline.' : 'Draft what to order next — never changes stock. New products can be included.'}</p>
+            <h3 className="font-bold text-white text-lg">{rx ? 'Receive consignment' : 'Current Reorder Lists'}</h3>
+            <p className="text-xs text-slate-500">{rx ? 'Stock updates immediately. New products can be created inline.' : canCreateList ? 'Lists already saved — expand one to check its items or mark it processed, then start the next list below.' : 'Lists already saved — expand one to check its items or mark it processed.'}</p>
           </div>
           <button className="btn-ghost text-xs" onClick={onClose}>Close</button>
         </div>
-                {!rx && <button type="button" className="btn-ghost text-xs mb-3" onClick={addLow}>+ Suggest low-stock items</button>}
+        {/* Reorder mode only: the current reorder lists open the modal - the cashier picks a
+            pending list here (or marks one processed) before drafting a new one. */}
+        {!rx && historyPanel}
+        {!rx && canCreateList && (
+          <div className="mb-2">
+            <h3 className="font-bold text-white text-lg">Create New Reorder List</h3>
+            <p className="text-xs text-slate-500">Draft what to order next — never changes stock. New products can be included.</p>
+          </div>
+        )}
+        {!rx && canCreateList && <button type="button" className="btn-ghost text-xs mb-3" onClick={addLow}>+ Suggest low-stock items</button>}
         {rx && sourceList && (
           <p className="text-xs text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-3 py-2 mb-3">
             Fulfilling reorder list: <span className="font-medium">{sourceList.title || sourceList.reference || 'untitled'}</span>
@@ -177,6 +262,7 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
           </p>
         )}
         {rx && !can && <p className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 mb-3">No receive permission yet — an admin can grant “Inventory entry” in Team &amp; Codes.</p>}
+        {(rx || canCreateList) && (
         <div className="grid md:grid-cols-2 gap-3 mb-3">
           {rx ? (
             <>
@@ -192,6 +278,8 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
             </>
           )}
         </div>
+        )}
+        {(rx || canCreateList) && (
         <div className="grid md:grid-cols-2 gap-3">
           <div className="card p-3">
             <div className="text-xs font-semibold text-slate-300 mb-2">Add existing product</div>
@@ -220,8 +308,10 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
                 </button>
               ))}
             </div>
-            <button type="button" className="btn-ghost text-xs w-full mt-2" onClick={() => setShowNew((v) => !v)}>{showNew ? 'Hide new product' : '+ New product'}</button>
-            {showNew && (
+            {(!rx || can) && (
+              <button type="button" className="btn-ghost text-xs w-full mt-2" onClick={() => setShowNew((v) => !v)}>{showNew ? 'Hide new product' : '+ New product'}</button>
+            )}
+            {showNew && (!rx || can) && (
               <div className="mt-2 space-y-2 border-t border-slate-800/70 pt-2">
                 <div className="grid grid-cols-2 gap-2">
                   <input className="input" value={draft.sku} onChange={(e) => setDraft({ ...draft, sku: e.target.value })} placeholder="SKU" />
@@ -272,73 +362,15 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
             {rx && lines.length > 0 && <div className="text-xs text-slate-400 mt-2"><div className="flex justify-between"><span>Landed total</span><span className="text-brand-300 font-semibold">{ugx(itemsTotal + (Number.isFinite(del) ? del : 0))}</span></div></div>}
           </div>
         </div>
+        )}
         {err && <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mt-3">{err}</p>}
-        <div className="flex justify-end gap-2 mt-3">
-          <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn-primary" disabled={busy || (rx && !can)} onClick={() => void save()}>{busy ? 'Saving' : rx ? 'Receive stock' : 'Save reorder'}</button>
-        </div>
-        <div className="mt-4 border-t border-slate-800/70 pt-3">
-          <div className="text-xs font-semibold text-slate-300 mb-2">{rx ? 'Recent deliveries' : 'Saved lists'}</div>
-          {loading ? <div className="text-xs text-slate-600">Loading</div> : hist.length === 0 ? <div className="text-xs text-slate-600">None yet.</div> : (
-            <div className="space-y-1.5 max-h-64 overflow-y-auto">
-              {(rx ? hist : hist.filter((r) => r.status ? (r.status === 'pending' || r.status === 'processed') : !r.fulfilled)).slice(0, 20).map((r) => {
-                const open = openHist === r.id
-                return (
-                  <div key={r.id} className="text-xs text-slate-400 border border-slate-800 rounded-lg px-2.5 py-2">
-                    <button
-                      type="button"
-                      className="w-full flex items-center justify-between gap-2 text-left"
-                      onClick={() => setOpenHist(open ? null : r.id)}
-                    >
-                      <span className="text-white">
-                        {rx ? r.reference : r.title} - {r.items.length} items
-                        {!rx && (r.status === 'processed' ? ' · processed' : ' · pending')}
-                      </span>
-                      <span className={cn('text-slate-600 transition-transform', open && 'rotate-90')}>›</span>
-                    </button>
-                    {!open && (
-                      <div className="mt-0.5 truncate">{r.items.map((i) => i.name + ' x' + i.qty).join(', ')}</div>
-                    )}
-                    {!rx && (r.status === 'pending' || !r.status) && (
-                      <div className="mt-1.5">
-                        <button
-                          type="button"
-                          className="text-[11px] px-2.5 py-1 rounded-md bg-emerald-600 text-white font-semibold hover:bg-emerald-500 active:bg-emerald-700 transition shadow-sm"
-                          onClick={() => void markList(r, 'processed')}
-                        >
-                          Mark processed
-                        </button>
-                      </div>
-                    )}
-                      {rx && (r.source_list_title || r.source_list_id) && (
-                        <div className="mt-0.5 text-sky-300">Fulfills {r.source_list_title || 'Reorder list'}</div>
-                      )}
-                    {open && (
-                      <div className="mt-2 border-t border-slate-800/70 pt-2 space-y-1">
-                        {r.items.map((i, idx) => (
-                          <div key={i.product_id || `n${idx}`} className="flex items-center justify-between gap-2">
-                            <span className="min-w-0 truncate">
-                              <span className="font-mono text-slate-500">{i.sku}</span> {i.name}
-                              {i.new_product && <span className="ml-1 text-[10px] text-sky-400">new</span>}
-                        {rx && (r.source_list_title || r.source_list_id) && (
-                          <div className="text-sky-300">Fulfills {r.source_list_title || 'Reorder list'}</div>
-                        )}
-                            </span>
-                            <span className="text-slate-300 shrink-0">×{i.qty}{rx && i.unit_cost ? ` · ${ugx(Number(i.unit_cost) || 0)}` : ''}</span>
-                          </div>
-                        ))}
-                        <div className="flex justify-between border-t border-slate-800/70 pt-1 text-slate-500">
-                          <span>Total qty: {r.items.reduce((s, i) => s + i.qty, 0)}</span>
-                          {rx && <span>Items total: {ugx(r.items.reduce((s, i) => s + i.qty * (Number(i.unit_cost) || 0), 0))}</span>}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
+        {(rx || canCreateList) && (
+          <div className="flex justify-end gap-2 mt-3">
+            <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn-primary" disabled={busy || (rx && !can)} onClick={() => void save()}>{busy ? 'Saving' : rx ? 'Receive stock' : 'Save reorder'}</button>
+          </div>
+        )}
+        {rx && historyPanel}
       </div>
     </div>
   )

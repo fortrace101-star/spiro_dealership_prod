@@ -1,20 +1,29 @@
+const { hasPermission, normalizeRole } = require('../permissions/catalog');
+
 /**
- * Permission guard for POS capabilities granted via activation codes.
- * Reads req.user.permissions (array of strings, merged from the user's
- * activation code at registration). Admins always pass; roles listed in
- * unlessRoles inherently hold every permission (managers, by default).
+ * Permission guard for POS capabilities.
+ *
+ * The role baseline lives in the catalog: managers hold every POS operation
+ * and operators hold the selling + credit ones (requests + settlements, never
+ * receiving / reservations / installments). The administrator can elevate a
+ * trusted operator with an explicit grant (`inventory_receive`, `installment_
+ * collect`, `reservation_*`, …). `req.user` is reloaded from the database on
+ * every request, so a grant or revoke applies immediately — no re-login.
+ *
+ * `unlessRoles` stays available for the rare route that wants to bypass the
+ * catalog entirely; it is empty by default because the role baseline already
+ * covers it.
  */
 function requirePermission(permission, opts = {}) {
-  const { unlessRoles = ['manager'] } = opts;
+  const { unlessRoles = [] } = opts;
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
-    if (req.user.role === 'admin' || unlessRoles.includes(req.user.role)) return next();
-
-    const perms = Array.isArray(req.user.permissions) ? req.user.permissions : [];
-    if (perms.includes(permission)) return next();
+    if (unlessRoles.map(normalizeRole).includes(normalizeRole(req.user.role))) return next();
+    if (hasPermission(req.user, permission)) return next();
 
     return res.status(403).json({ error: `Missing permission: ${permission}` });
   };
 }
 
 module.exports = { requirePermission };
+

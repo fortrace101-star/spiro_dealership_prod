@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { dateTime, ugx } from '../lib/format'
-import type { Approval } from '../lib/types'
+import type { Approval, SaleItem } from '../lib/types'
 import { usePageSize } from '../lib/usePageSize'
 import { EmptyState, PageHeader, Spinner } from '../components/ui'
 import { Modal } from '../components/Modal'
@@ -73,6 +73,30 @@ export default function ApprovalsPage() {
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [detail, setDetail] = useState<Approval | null>(null)
     const [error, setError] = useState('')
+  // Line items of the credit sale under review — fetched live from the sale
+  // record so the approver sees exactly what is being taken on credit.
+  const [saleItems, setSaleItems] = useState<SaleItem[] | null>(null)
+  const [itemsError, setItemsError] = useState('')
+
+  useEffect(() => {
+    setSaleItems(null)
+    setItemsError('')
+    if (!detail || detail.type !== 'credit_sale') return
+    const saleId = ((detail.payload || {}) as Record<string, unknown>).sale_id
+    if (!saleId || typeof saleId !== 'string') return
+    let cancelled = false
+    api
+      .sale(saleId)
+      .then((r) => {
+        if (!cancelled) setSaleItems(r.items || [])
+      })
+      .catch(() => {
+        if (!cancelled) setItemsError('Could not load the items for this sale.')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [detail])
 
   const [page, setPage] = useState(1)
   const pageSize = usePageSize()
@@ -296,6 +320,47 @@ export default function ApprovalsPage() {
                 </div>
               ))}
             </div>
+
+            {/* What is actually being taken on credit — the sale's line items. */}
+            {detail.type === 'credit_sale' && (
+              <div>
+                <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">
+                  Items on this credit sale
+                </div>
+                {itemsError ? (
+                  <p className="text-xs text-red-400">{itemsError}</p>
+                ) : saleItems === null ? (
+                  <p className="text-xs text-slate-600">Loading items…</p>
+                ) : saleItems.length === 0 ? (
+                  <p className="text-xs text-slate-600">No line items recorded on this sale.</p>
+                ) : (
+                  <div className="rounded-lg border border-slate-800 divide-y divide-slate-800">
+                    {saleItems.map((it) => (
+                      <div key={it.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                        <div className="min-w-0">
+                          <div className="text-slate-200 truncate">
+                            {it.name}
+                            <span className="ml-2 text-[10px] uppercase tracking-wide text-slate-500">
+                              {it.kind === 'bike' ? 'E-bike' : 'Part'}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            {it.qty} × {ugx(Number(it.unit_price))}
+                          </div>
+                        </div>
+                        <div className="text-slate-200 font-medium shrink-0">{ugx(Number(it.line_total))}</div>
+                      </div>
+                    ))}
+                    <div className="flex justify-between px-3 py-2 text-sm bg-slate-900/40">
+                      <span className="text-slate-500">Items total</span>
+                      <span className="text-white font-semibold">
+                        {ugx(saleItems.reduce((s, i) => s + Number(i.line_total || 0), 0))}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {detail.status !== 'pending' && (
               <div className="text-xs text-slate-500">

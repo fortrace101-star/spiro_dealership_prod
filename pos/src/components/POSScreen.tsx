@@ -2,9 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/database'
 import { createSale, getTodaySales } from '../db/repos'
-import { api, clearSession, getDeviceId, getStoredUser, normalizeCategory, type ProductCategory, type PurchasingRecord } from '../lib/api'
+import { api, clearSession, getDeviceId, getStoredUser, getToken, normalizeCategory, setSession, type AppNotification, type ProductCategory, type PurchasingRecord } from '../lib/api'
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner'
-import { dispatchBarcode } from '../services/barcodeScanner'
 import { playPushChime, usePush } from '../hooks/usePush'
 import { useSyncStatus } from '../hooks/useSyncStatus'
 import { runSyncCycle } from '../services/sync'
@@ -19,6 +18,13 @@ import ReceivingScreen from './ReceivingScreen'
 import ReceiveSelectModal from './ReceiveSelectModal'
 import ReservationsModal from './ReservationsModal'
 import { cn } from '../lib/cn'
+
+// Permission sets that decide which toolbar/header entries render at all
+// (hide-not-disable). Same ids as server/src/permissions/catalog.js — the
+// server re-checks on every request; this only decides what the terminal offers.
+const RESERVATION_PERMS = ['reservation_create', 'installment_collect', 'reservation_complete', 'reservation_release'] as const
+const REORDER_PERMS = ['reorder_create', 'reorder_manage'] as const
+const CREDIT_DESK_PERMS = ['credit_request', 'credit_finalize', 'credit_settle'] as const
 
 export default function POSScreen() {
   const user = getStoredUser()!
@@ -54,11 +60,27 @@ export default function POSScreen() {
   const [reserveBike, setReserveBike] = useState<Bike | null>(null)
   const [showAccount, setShowAccount] = useState(false)
   const [canReceive, setCanReceive] = useState(false)
+  // Enforced capability set (role baseline ∪ admin grants) as reported by the
+  // server. Refreshed on mount so a grant/revoke made on the Team page appears
+  // without a re-login; the server re-checks every request regardless.
+  const [perms, setPerms] = useState<string[]>(user.effective_permissions || [])
+  const hasPerm = useCallback((permission: string) => perms.includes(permission), [perms])
+  const hasAnyPerm = useCallback((ids: readonly string[]) => ids.some((id) => perms.includes(id)), [perms])
+  // Entry-point visibility: a user only sees what they can act on. Individual
+  // actions (Finalize, Complete, Release…) stay gated inside their screens.
+  const canReserve = hasAnyPerm(RESERVATION_PERMS)
+  const canReorder = hasAnyPerm(REORDER_PERMS)
+  const canCreditDesk = hasAnyPerm(CREDIT_DESK_PERMS)
   const [reorderCount, setReorderCount] = useState(0)
   const [flash, setFlash] = useState<string | null>(null)
   const [showCredit, setShowCredit] = useState(false)
   const [creditBadge, setCreditBadge] = useState({ awaiting: 0, approved: 0, rejected: 0 })
   const [creditNote, setCreditNote] = useState<string | null>(null)
+  // Durable inbox bell (shared `notifications` table, scoped to this user).
+  const [notifUnread, setNotifUnread] = useState(0)
+  const [showNotifs, setShowNotifs] = useState(false)
+  const [notifs, setNotifs] = useState<AppNotification[]>([])
+  const [notifLoading, setNotifLoading] = useState(false)
   // Stable identity so CreditModal's load callback (and its refresh timer) don't reset every render.
   const refreshBadge = useCallback(
     (counts: { awaiting: number; approved: number; rejected: number }) => setCreditBadge(counts),
@@ -81,28 +103,48 @@ export default function POSScreen() {
     }
   }, [])
 
-  // Stock-in capability is granted per activation code; admins/managers always have it.
+  // Stock-in capability is per role / grant (managers hold it; an operator only
+  // when the admin granted `inventory_receive`). The same round trip refreshes
+  // the whole capability set so manager-only screens (reservations) show up.
   useEffect(() => {
     api.purchasingCatalog()
       .then((r) => setCanReceive(r.can_receive))
       .catch(() => setCanReceive(false))
-    }, [])
+    api
+      .me()
+      .then((r) => {
+        setPerms(r.user.effective_permissions || [])
+        const token = getToken()
+        if (token) setSession(token, r.user)
+      })
+      .catch(() => {
+        /* offline — keep the capabilities we logged in with */
+      })
+  }, [])
 
   // Count of pending + processed reorder lists for the notification badge.
   // Fulfilled (already received) lists are not included; cancelled lists are gone.
+  // Skipped (and cleared) unless the user can open reorder lists at all — no
+  // pointless 403s from a restricted terminal.
   useEffect(() => {
+    if (!canReorder) { setReorderCount(0); return }
     api.reorderCounts()
       .then((r) => {
         const attention = r.counts.pending + r.counts.processed
         setReorderCount(attention > 0 ? attention : 0)
       })
       .catch(() => setReorderCount(0))
-    }, [])
+    }, [canReorder])
 
   // Credit bell — polling fallback for approval decisions (works when push is
   // blocked): keeps the header badge fresh and toasts NEW decisions only. The
   // last-seen decision timestamp is baselined on first run so history never toasts.
   useEffect(() => {
+    // No credit permissions → no desk, no polling, no badge.
+    if (!canCreditDesk) {
+      setCreditBadge({ awaiting: 0, approved: 0, rejected: 0 })
+      return
+    }
     let cancelled = false
     async function pollCredit() {
       if (!sync.online) return
@@ -141,7 +183,7 @@ export default function POSScreen() {
       cancelled = true
       clearInterval(id)
     }
-  }, [sync.online])
+  }, [sync.online, canCreditDesk])
 
   const products = useLiveQuery(() => db.products.toArray(), [])
   const bikes = useLiveQuery(() => db.bikes.where('status').equals('in_stock').toArray(), [])
@@ -195,8 +237,8 @@ export default function POSScreen() {
     [cart],
   )
 
-  // Barcode scan handler — local IndexedDB lookup (never a network round trip).
-  // Shared by the physical scanner, keyboard-typed scans and the test-scan box.
+  // Barcode scanner — local IndexedDB lookup (never a network round trip).
+  // Wired to the HID-keyboard scanner service (types fast + Enter).
   const handleScan = useCallback(
     async (code: string) => {
       const p = await db.products.where('barcode').equals(code).first()
@@ -215,8 +257,6 @@ export default function POSScreen() {
     [addProduct, addBike],
   )
   useBarcodeScanner(handleScan)
-
-  const [scanTest, setScanTest] = useState('')
 
   useEffect(() => {
     if (!flash) return
@@ -259,21 +299,67 @@ export default function POSScreen() {
       } else if (payload.title) {
         setFlash(payload.title)
       }
+      // Every push lands an inbox row — recount the bell immediately.
+      void api.unreadCount().then((r) => setNotifUnread(r.unread_count)).catch(() => {})
     }
     navigator.serviceWorker?.addEventListener('message', onMessage)
     return () => navigator.serviceWorker?.removeEventListener('message', onMessage)
   }, [])
 
-  const totals = cartTotals(cart.items, cart.discount)
+  // Inbox badge: poll (30s, mirrors the credit poll — kiosk-safe, no dialogs)
+  // plus the instant refetch on every incoming push above.
+  useEffect(() => {
+    const poll = () => void api.unreadCount().then((r) => setNotifUnread(r.unread_count)).catch(() => {})
+    poll()
+    const id = setInterval(poll, 30_000)
+    return () => clearInterval(id)
+  }, [])
 
-  async function completeCheckout(input: { discount: number; payment_method: PaymentMethod; amount_paid: number; customer_name: string | null; customer_phone: string | null }) {
+  async function openNotifs() {
+    const next = !showNotifs
+    setShowNotifs(next)
+    if (!next) return
+    setNotifLoading(true)
+    try {
+      const r = await api.notifications()
+      setNotifs(r.notifications)
+      setNotifUnread(r.unread_count)
+    } catch {
+      /* offline — keep what we had */
+    }
+    setNotifLoading(false)
+  }
+
+  async function clickNotif(n: AppNotification) {
+    if (!n.read_at) {
+      setNotifs((prev) => prev.map((x) => (x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x)))
+      setNotifUnread((c) => Math.max(0, c - 1))
+      try { await api.markNotificationRead(n.id) } catch { /* next poll reconciles */ }
+    }
+    setShowNotifs(false)
+    // Single-screen app: no deep-linking — just acknowledge the headline.
+    setFlash(n.title)
+  }
+
+  async function readAllNotifs() {
+    const now = new Date().toISOString()
+    setNotifs((prev) => prev.map((x) => (x.read_at ? x : { ...x, read_at: now })))
+    setNotifUnread(0)
+    try { await api.markAllNotificationsRead() } catch { /* non-fatal */ }
+  }
+
+  const totals = cartTotals(cart.items)
+
+  // Discounts are admin-only, so the checkout payload never carries one.
+  // Stock-in / reservations below are gated on the capability set the server
+  // computes for this user (role baseline ∪ admin grants).
+  async function completeCheckout(input: { payment_method: PaymentMethod; amount_paid: number; customer_name: string | null; customer_phone: string | null }) {
     const sale = await createSale({
       cashier_id: user.id,
       cashier_name: user.full_name,
       device_id: getDeviceId(),
       customer_name: input.customer_name,
       customer_phone: input.customer_phone,
-      discount: input.discount,
       payment_method: input.payment_method,
       amount_paid: input.amount_paid,
       items: cart.items.map((i) => ({
@@ -349,50 +435,120 @@ export default function POSScreen() {
               title={
                 push.state === 'denied'
                   ? 'Notifications are blocked in the browser — allow them via the address-bar lock icon, then retry'
-                  : 'Get an OS notification the moment the admin approves or rejects your credit sales'
+                  : 'Get an OS notification for credit decisions, release outcomes, installments and permission grants'
               }
               onClick={() => {
                 void push.enable().then((ok) => {
-                  if (ok) setFlash('Alerts on — you’ll be pinged the moment a credit sale is approved')
+                  if (ok) setFlash('Alerts on — you’ll be pinged the moment a decision or grant lands')
                 })
               }}
             >
               {push.busy ? 'Enabling…' : push.state === 'denied' ? 'Alerts blocked' : 'Enable alerts'}
             </button>
           )}
-          <button
-            className="btn-ghost text-xs relative"
-            onClick={() => setShowCredit(true)}
-            title={
-              creditBadge.approved > 0
-                ? `${creditBadge.approved} approved — ready to finalize`
-                : creditBadge.rejected > 0
-                  ? `${creditBadge.rejected} rejected — confirm receipt in the Credit desk`
-                  : creditBadge.awaiting > 0
-                    ? `${creditBadge.awaiting} credit sale(s) awaiting approval`
-                    : 'Credit desk — queue, finalize & settlements'
-            }
-          >
-            Credit
-            {(creditBadge.approved > 0 || creditBadge.rejected > 0 || creditBadge.awaiting > 0) && (
-              <span
-                className={cn(
-                  'absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 flex items-center justify-center text-[9px] font-bold text-white rounded-full ring-1 ring-slate-800',
-                  creditBadge.approved > 0
-                    ? 'bg-brand-500'
-                    : creditBadge.rejected > 0
-                      ? 'bg-red-500'
-                      : 'bg-amber-500',
-                )}
-              >
-                {creditBadge.approved > 0
-                  ? creditBadge.approved
-                  : creditBadge.rejected > 0
-                    ? creditBadge.rejected
-                    : creditBadge.awaiting}
-              </span>
+          {/* Durable inbox bell */}
+          <div className="relative">
+            <button
+              type="button"
+              className="btn-ghost text-xs relative"
+              onClick={() => void openNotifs()}
+              title={notifUnread > 0 ? `${notifUnread} unread notification${notifUnread === 1 ? '' : 's'}` : 'Notifications'}
+              aria-label="Notifications"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+              </svg>
+              {notifUnread > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 flex items-center justify-center text-[9px] font-bold text-white rounded-full bg-brand-500 ring-1 ring-slate-800">
+                  {notifUnread > 99 ? '99+' : notifUnread}
+                </span>
+              )}
+            </button>
+            {showNotifs && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowNotifs(false)} />
+                <div className="absolute right-0 top-full mt-2 w-[300px] max-h-[70vh] overflow-y-auto card p-2 z-50 shadow-2xl">
+                  <div className="flex items-center justify-between px-2 py-1.5">
+                    <span className="text-xs font-semibold text-white uppercase tracking-wider">Notifications</span>
+                    <button type="button" className="text-[11px] text-brand-300 hover:text-brand-200" onClick={() => void readAllNotifs()}>
+                      Mark all read
+                    </button>
+                  </div>
+                  {notifLoading ? (
+                    <p className="text-xs text-slate-500 px-2 py-3">Loading…</p>
+                  ) : notifs.length === 0 ? (
+                    <p className="text-xs text-slate-500 px-2 py-3">Nothing yet — credit decisions, release outcomes and permission grants land here.</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {notifs.map((n) => (
+                        <button
+                          key={n.id}
+                          type="button"
+                          onClick={() => void clickNotif(n)}
+                          className={cn('w-full text-left rounded-lg px-2.5 py-2 transition', n.read_at ? 'opacity-60' : 'bg-brand-500/10 hover:bg-brand-500/20')}
+                        >
+                          <div className="flex items-start gap-2">
+                            {!n.read_at && <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-400" />}
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold text-white truncate">{n.title}</div>
+                              <div className="text-[11px] text-slate-400 leading-snug">{n.body}</div>
+                              <div className="text-[10px] text-slate-600 mt-0.5">
+                                {new Date(n.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
             )}
-          </button>
+          </div>
+          {canCreditDesk && (
+            <button
+              className="btn-ghost text-xs relative"
+              onClick={() => setShowCredit(true)}
+              title={
+                creditBadge.approved > 0
+                  ? `${creditBadge.approved} approved — ready to finalize`
+                  : creditBadge.rejected > 0
+                    ? `${creditBadge.rejected} rejected — confirm receipt in the Credit desk`
+                    : creditBadge.awaiting > 0
+                      ? `${creditBadge.awaiting} credit sale(s) awaiting approval`
+                      : 'Credit desk — queue, finalize & settlements'
+              }
+            >
+              Credit
+              {(creditBadge.approved > 0 || creditBadge.rejected > 0 || creditBadge.awaiting > 0) && (
+                <span
+                  className={cn(
+                    'absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 flex items-center justify-center text-[9px] font-bold text-white rounded-full ring-1 ring-slate-800',
+                    creditBadge.approved > 0
+                      ? 'bg-brand-500'
+                      : creditBadge.rejected > 0
+                        ? 'bg-red-500'
+                        : 'bg-amber-500',
+                  )}
+                >
+                  {creditBadge.approved > 0
+                    ? creditBadge.approved
+                    : creditBadge.rejected > 0
+                      ? creditBadge.rejected
+                      : creditBadge.awaiting}
+                </span>
+              )}
+            </button>
+          )}
+          {canReserve && (
+            <button
+              className="btn-ghost text-xs"
+              onClick={() => { setReserveBike(null); setShowReservations(true) }}
+              title="Bike reservations — browse, take down payments, collect installments, complete or release"
+            >
+              Reservations
+            </button>
+          )}
           <button className="btn-ghost text-xs" onClick={() => setShowHistory(true)}>History</button>
           <button className="btn-ghost text-xs" onClick={() => void runSyncCycle('manual')} disabled={sync.syncing}>
             {sync.syncing ? 'Syncing…' : 'Sync now'}
@@ -411,46 +567,27 @@ export default function POSScreen() {
               <button className={cn('btn text-xs', major === 'ebikeparts' ? 'btn-primary' : 'btn-ghost')} onClick={() => { setMajor('ebikeparts'); setCategory('All') }}>e-Bike Spare Parts</button>
             </div>
             <div className="flex items-center gap-2">
-              <button className="btn-ghost text-xs" onClick={() => setStockMode('receive-select')} disabled={!canReceive}>Receive stock</button>
-              <button className="btn-ghost text-xs relative" onClick={() => setStockMode('reorder')}>
-                Reorder list
-                                {reorderCount > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 w-4 h-4 flex items-center justify-center text-[9px] font-bold text-white bg-orange-500 rounded-full ring-1 ring-slate-800">
-                    {reorderCount > 9 ? '9+' : reorderCount}
-                  </span>
-                )}
-              </button>
+              {canReceive && (
+                <button className="btn-ghost text-xs" onClick={() => setStockMode('receive-select')}>Receive stock</button>
+              )}
+              {canReorder && (
+                <button className="btn-ghost text-xs relative" onClick={() => setStockMode('reorder')}>
+                  Reorder list
+                  {reorderCount > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 w-4 h-4 flex items-center justify-center text-[9px] font-bold text-white bg-orange-500 rounded-full ring-1 ring-slate-800">
+                      {reorderCount > 9 ? '9+' : reorderCount}
+                    </span>
+                  )}
+                </button>
+              )}
             </div>
           </div>
-          <div className="flex gap-2">
-            <input
-              className="input flex-1 min-w-0"
-              placeholder="Search name / SKU / VIN — or just scan a barcode…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            {/* Test-scan box: dispatches through the exact same handler as the
-                physical scanner, so the flow is testable with a keyboard. */}
-            <form
-              className="flex gap-1.5 shrink-0"
-              onSubmit={(e) => {
-                e.preventDefault()
-                const code = scanTest.trim()
-                if (!code) return
-                dispatchBarcode(code) // same path a physical scan takes
-                setScanTest('')
-              }}
-            >
-              <input
-                className="input w-44 font-mono text-sm"
-                placeholder="Test scan: barcode…"
-                title="Simulate a barcode scan — same handler as the physical scanner (e.g. 6341727100289)"
-                value={scanTest}
-                onChange={(e) => setScanTest(e.target.value)}
-              />
-              <button type="submit" className="btn-ghost text-xs shrink-0">Scan</button>
-            </form>
-          </div>
+          <input
+            className="input"
+            placeholder="Search name / SKU / VIN — or just scan a barcode…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
 
           {/* Sub-pills refine the I.C.E tab only; the other tabs map to a single database category. */}
           {major === 'ice' && (
@@ -482,14 +619,18 @@ export default function POSScreen() {
                       <div className="text-brand-300 font-bold mt-2">{ugx(b.selling_price)}</div>
                       {b.battery_spec && <div className="text-[10px] text-slate-500 mt-1">🔋 {b.battery_spec}</div>}
                     </button>
-                    <button
-                      className="mt-3 w-full text-xs font-semibold px-2 py-1.5 rounded-lg border border-brand-500/40 text-brand-300 hover:bg-brand-500/10 transition disabled:opacity-40 disabled:cursor-not-allowed"
-                      disabled={!sync.online}
-                      title={sync.online ? 'Take a down payment and reserve this bike on an installment plan' : 'Reservations need a connection'}
-                      onClick={() => { setReserveBike(b); setShowReservations(true) }}
-                    >
-                      Reserve · down payment
-                    </button>
+                    {/* Reservations are manager work: a plain operator only sees
+                        this when the admin granted `reservation_create`. */}
+                    {hasPerm('reservation_create') && (
+                      <button
+                        className="mt-3 w-full text-xs font-semibold px-2 py-1.5 rounded-lg border border-brand-500/40 text-brand-300 hover:bg-brand-500/10 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                        disabled={!sync.online}
+                        title={sync.online ? 'Take a down payment and reserve this bike on an installment plan' : 'Reservations need a connection'}
+                        onClick={() => { setReserveBike(b); setShowReservations(true) }}
+                      >
+                        Reserve · down payment
+                      </button>
+                    )}
                   </div>
                 ))}
                 {filteredBikes.length === 0 && <div className="col-span-full text-center text-sm text-slate-600 py-10">No bikes available in local catalog.</div>}
@@ -546,7 +687,7 @@ export default function POSScreen() {
           <div className="flex-1 overflow-y-auto p-3 space-y-2">
             {cart.items.length === 0 && (
               <div className="text-center text-sm text-slate-600 py-12">
-                Scan a barcode, use the test-scan box, or tap a product
+                Scan a barcode or tap a product
                 <div className="text-xs mt-2 text-slate-700">Scanner input lands here automatically</div>
               </div>
             )}
@@ -583,11 +724,6 @@ export default function POSScreen() {
             <div className="flex justify-between text-sm text-slate-400">
               <span>Subtotal</span><span>{ugx(totals.subtotal)}</span>
             </div>
-            {cart.discount > 0 && (
-              <div className="flex justify-between text-sm text-amber-300">
-                <span>Discount</span><span>− {ugx(totals.discount)}</span>
-              </div>
-            )}
             <div className="flex justify-between text-lg font-bold text-white pt-1 border-t border-slate-800/60">
               <span>Total</span><span>{ugx(totals.total)}</span>
             </div>
@@ -629,7 +765,7 @@ export default function POSScreen() {
             <div className="text-[11px] text-slate-500 mt-1">
               Alerts:{' '}
               {push.state === 'subscribed'
-                ? '✓ on — credit decisions arrive as notifications'
+                ? '✓ on — decisions, releases & grants arrive as notifications'
                 : push.state === 'denied'
                   ? 'blocked in browser settings'
                   : push.state === 'unsupported'
@@ -660,7 +796,7 @@ export default function POSScreen() {
 
       {showHistory && <HistoryModal onClose={() => setShowHistory(false)} />}
 
-      {showCredit && (
+      {showCredit && canCreditDesk && (
         <CreditModal
           online={sync.online}
           onClose={() => setShowCredit(false)}
@@ -669,10 +805,10 @@ export default function POSScreen() {
         />
       )}
 
-      {showReservations && (
+      {showReservations && canReserve && (
         <ReservationsModal
           prefillBike={reserveBike}
-          onClose={() => setShowReservations(false)}
+          onClose={() => { setShowReservations(false); setReserveBike(null) }}
           onFlash={(msg) => {
             setFlash(msg)
             void runSyncCycle('after-reservation')
@@ -699,17 +835,22 @@ export default function POSScreen() {
             setStockMode(null); setSourceList(null); setFlash(message)
             void runSyncCycle('after-receive')
             // Refresh the reorder-list badge count — only pending + processed count.
-            api.reorderCounts()
-              .then((r) => {
-                const attention = r.counts.pending + r.counts.processed
-                setReorderCount(attention > 0 ? attention : 0)
-              })
-              .catch(() => setReorderCount(0))
+            // Skipped when the user cannot open reorder lists (no permission → 403).
+            if (canReorder) {
+              api.reorderCounts()
+                .then((r) => {
+                  const attention = r.counts.pending + r.counts.processed
+                  setReorderCount(attention > 0 ? attention : 0)
+                })
+                .catch(() => setReorderCount(0))
+            } else {
+              setReorderCount(0)
+            }
           }}
         />
       )}
 
-      {stockMode === 'reorder' && canReceive && (
+      {stockMode === 'reorder' && canReorder && (
         <ReceivingScreen
           mode="reorder"
           canReceive={canReceive}

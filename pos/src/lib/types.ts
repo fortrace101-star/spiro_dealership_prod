@@ -96,7 +96,14 @@ export interface SessionUser {
   id: string
   full_name: string
   role: string
+  /** Grants stored on the user row (what the admin ticked, legacy aliases included). */
   permissions?: string[]
+  /**
+   * Role baseline ∪ grants, as computed by the server catalog. This is what the
+   * POS uses to show/hide manager-only screens; the server re-checks every
+   * request, so a grant or revoke applies on the next call.
+   */
+  effective_permissions?: string[]
 }
 
 export interface ReservationBikeMini {

@@ -27,6 +27,8 @@ self.addEventListener('push', (event) => {
         icon: '/logo.png',
         badge: '/pwa-192.png',
         tag: data.tag || undefined,
+        // Same tag = replace + re-alert, so a repeated event still beeps.
+        renotify: Boolean(data.tag),
         // OS notification must beep/vibrate on arrival even with no POS tab focused.
         silent: false,
         data: { url: '/' },

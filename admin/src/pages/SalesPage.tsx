@@ -140,11 +140,7 @@ export default function SalesPage() {
                           Pending approval
                         </span>
                       )}
-                      {s.payment_method === 'credit' && s.status === 'rejected' && (
-                        <span className="ml-1.5 inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-medium whitespace-nowrap bg-red-500/15 text-red-300 border-red-500/30">
-                          Rejected
-                        </span>
-                      )}
+                      <CreditDecision sale={s} />
                     </td>
                     <td className="td text-right font-semibold text-white tabular-nums whitespace-nowrap">
                       <span className="sm:hidden">{compactUgx(s.total)}</span>
@@ -231,6 +227,51 @@ export default function SalesPage() {
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * Latest credit-sale decision shown beside the payment badge — `null` unless
+ * this is a credit sale that has one. The sale-level `rejected` status wins,
+ * then the approval record's own outcome (`approval_status`).
+ */
+function creditDecision(s: Sale): 'approved' | 'rejected' | null {
+  if (s.payment_method !== 'credit') return null
+  if (s.status === 'rejected' || s.approval_status === 'rejected') return 'rejected'
+  return s.approval_status === 'approved' ? 'approved' : null
+}
+
+/**
+ * Credit decision beside the Credit badge in the Payment cell: a compact
+ * **green tick** for an approved credit sale and a **red cross** for a rejected
+ * one on phones (no room for words there), each with a `title`/`aria-label`
+ * so the mark is never color-only. From `sm:` up the same decision is spelled
+ * out as the tinted "Approved" / "Rejected" pill. Non-credit sales render
+ * nothing, and "Pending approval" stays a text pill on every breakpoint.
+ */
+function CreditDecision({ sale }: { sale: Sale }) {
+  const decision = creditDecision(sale)
+  if (!decision) return null
+  const approved = decision === 'approved'
+  const tint = approved ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' : 'bg-red-500/15 text-red-300 border-red-500/30'
+  const label = approved ? 'Approved credit sale' : 'Rejected credit sale'
+  return (
+    <>
+      <span
+        role="img"
+        title={label}
+        aria-label={label}
+        className={cn(
+          'ml-1.5 inline-flex sm:hidden items-center justify-center h-[18px] w-[18px] rounded-md border text-[11px] font-bold leading-none',
+          tint,
+        )}
+      >
+        {approved ? '✓' : '✗'}
+      </span>
+      <span className={cn('ml-1.5 hidden sm:inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-medium whitespace-nowrap', tint)}>
+        {approved ? 'Approved' : 'Rejected'}
+      </span>
+    </>
   )
 }
 

@@ -216,6 +216,21 @@ Adding the Supplier line to the modal was required by Rule 2: it was a table
 column that had no representation in the modal, so hiding it would have made it
 unreachable on a phone.
 
+### Overview dashboard cards (KPI drill-downs, not tables)
+
+**File:** `src/pages/OverviewPage.tsx`
+
+The KPI cards open a shared detail modal (`CardDetail` union). The **Avg
+Transaction** card was replaced by **Bike Reservations** (Avg was removed from
+display entirely, per decision 2026-09-23): the card shows money collected
+today via reservations (down payments of new reservations + installment
+payments), with a `N new · N payments · N completed` delta. The drawer shows
+three groups — new reservations, payments on reserved bikes, completions —
+fed from `/api/reports/today`'s `reservations` object so card and drawer always
+match. **Option B accounting:** reservation money is isolated from Revenue /
+Gross Profit / payment mix (a reservation is not a sale until the bike is sold;
+see `server/src/routes/reports.js`).
+
 ---
 
 ## Rollout plan for the remaining tables
@@ -229,7 +244,7 @@ view exists or add one (Rule 2).
 | Page / table | Keep on mobile | Hide with `col-opt` |
 |---|---|---|
 | Inventory (main) | ✅ done | Category, Status, Actions (phones merge Cost/Price into one stacked column; PC keeps them separate) |
-| Sales (main, 7 cols) | ✅ done | Receipt, Cashier, Customer (credit rows also carry a Pending approval / Rejected chip beside the payment badge) |
+| Sales (main, 7 cols) | ✅ done | Receipt, Cashier, Customer (credit rows also carry the decision beside the payment badge — green ✓ / red ✗ on phones, an "Approved" / "Rejected" chip plus a "Pending approval" chip from `sm:` up) |
 | Credit (ledger, 6 cols) | ✅ done | Total, Paid (phones keep Receipt + customer subline, Balance, Status, Actions; rows open the drawer) |
 | Sales (items sub-table) | all — already fits | — |
 | Purchasing (item table inside the modal) | SKU, Product, Qty, Line total | Unit cost |
@@ -260,13 +275,28 @@ payment method, status and full profit breakdown, so hiding columns is safe.
 | Date | shown, compact | `timeAgo` on phone, `dateTime` from `sm:` up (same pattern as Audit Trail) |
 | Cashier | `col-opt` | in the drawer as the "Cashier" card |
 | Customer | `col-opt` | in the drawer as the "Customer" card |
-| Payment | shown | `Badge` unchanged |
+| Payment | shown | payment-method `Badge` unchanged; the credit decision beside it is a **green ✓ / red ✗ mark on phones** and the spelled-out "Approved" / "Rejected" chip from `sm:` up (`CreditDecision` in `SalesPage.tsx`); "Pending approval" stays a text chip on every breakpoint |
 | Total | shown, compact | `compactUgx` on phone, `ugx` from `sm:` up |
 | Profit | shown, compact | `compactUgx` on phone, `ugx` from `sm:` up; last visible cell on mobile, carries the `›` chevron |
 
 Display set approved by the developer (Rule 0): **Date, Payment, Total, Profit**
 visible on mobile; Receipt, Cashier, Customer hidden. Pagination was already in
 place (`usePageSize()`, 10 mobile / 20 PC) before this conversion.
+
+**Credit-sale decision in the Payment cell.** A credit sale shows the decision
+next to its Credit badge: **green ✓ when approved, red ✗ when rejected**
+(mirroring the tinted "Approved" / "Rejected" chips the desktop table uses
+directly). The two forms are one component (`CreditDecision`), split at the
+`sm:` boundary like every other mobile/desktop pair in this standard, so words
+return as soon as there is room for them. The mark is a shape **and** a color
+(not color alone) and carries a `title` + `aria-label` ("Approved credit sale" /
+"Rejected credit sale") that screen readers announce on phones, where the
+spelled-out chip is `display:none`. Nothing is rendered for non-credit sales,
+and a sale still awaiting its decision keeps the amber "Pending approval" chip
+on both breakpoints. `creditDecision()` derives it from `status === 'rejected'`
+/ `approval_status` (`src/lib/types.ts`), so a credit sale rejected through the
+approvals screen reads the same here as in the Credit ledger and the approvals
+list. The status itself is still in the row's detail drawer (`openDetail`).
 
 ### Bikes — approved display set
 

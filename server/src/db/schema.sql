@@ -8,8 +8,8 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT UNIQUE,
   phone TEXT,
   password_hash TEXT,                        -- null until activation
-  role TEXT NOT NULL DEFAULT 'cashier'
-    CHECK (role IN ('admin','manager','cashier','mechanic')),
+  role TEXT NOT NULL DEFAULT 'operator'
+    CHECK (role IN ('admin','manager','operator')),
   permissions JSONB NOT NULL DEFAULT '[]'::jsonb,  -- extra capabilities granted via activation code
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   activated_at TIMESTAMPTZ,
@@ -22,8 +22,8 @@ CREATE TABLE IF NOT EXISTS activation_codes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   code TEXT UNIQUE NOT NULL,
   label TEXT,                                -- e.g. "Kampala Road counter"
-  role TEXT NOT NULL DEFAULT 'cashier'
-    CHECK (role IN ('manager','cashier','mechanic')),
+  role TEXT NOT NULL DEFAULT 'operator'
+    CHECK (role IN ('manager','operator')),
   permissions JSONB NOT NULL DEFAULT '[]'::jsonb,  -- extra POS capabilities granted with this code
   created_by UUID REFERENCES users(id),
   claimed_by UUID REFERENCES users(id),
@@ -79,6 +79,18 @@ CREATE TABLE IF NOT EXISTS bikes (
 ALTER TABLE bikes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE activation_codes ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- Role rename for POS access control: the two POS roles are `manager` and
+-- `operator` (see server/src/permissions/catalog.js). `cashier` and `mechanic`
+-- predate the permission catalog and are folded into `operator`. The CHECK
+-- constraints are dropped BEFORE the UPDATEs and re-added afterwards: the old
+-- definitions reject 'operator' mid-migration.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE activation_codes DROP CONSTRAINT IF EXISTS activation_codes_role_check;
+UPDATE users SET role = 'operator' WHERE role IN ('cashier', 'mechanic');
+UPDATE activation_codes SET role = 'operator' WHERE role IN ('cashier', 'mechanic');
+ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin','manager','operator'));
+ALTER TABLE activation_codes ADD CONSTRAINT activation_codes_role_check CHECK (role IN ('manager','operator'));
 
 CREATE TABLE IF NOT EXISTS customers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -428,3 +440,30 @@ CREATE TABLE IF NOT EXISTS admin_recovery_codes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_recovery_codes_expires ON admin_recovery_codes(expires_at);
+
+-- The bootstrap setup code is generated before any user exists, so there is
+-- nobody to record as its creator. (Idempotent — safe on existing installs.)
+ALTER TABLE admin_recovery_codes ALTER COLUMN created_by DROP NOT NULL;
+
+-- ============================================================
+-- NOTIFICATIONS — durable cross-app inbox (admin + POS)
+-- Every push payload is persisted here first (services/push.js
+-- notifyAdmins/notifyUser), so a missing VAPID key, an unsubscribed
+-- device or an offline terminal can never lose an event. Both apps
+-- read the same table scoped to their own user.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS notifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL DEFAULT 'info',
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    url TEXT,
+    tag TEXT,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    read_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications (user_id) WHERE read_at IS NULL;

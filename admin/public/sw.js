@@ -28,6 +28,8 @@ self.addEventListener('push', (event) => {
         icon: '/logo.png',
         badge: '/logo.png',
         tag: data.tag || undefined,
+        // Same tag = replace + re-alert, so a repeated event still beeps.
+        renotify: Boolean(data.tag),
         // `silent: false` is the default, but set explicitly: OS notifications
         // must beep/vibrate on arrival even with no dashboard tab open.
         silent: false,

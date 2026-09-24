@@ -4,7 +4,6 @@ import type { CartCustomer, CartItem, PaymentMethod } from '../lib/types'
 interface CartState {
   items: CartItem[]
   customer: CartCustomer | null
-  discount: number
   paymentMethod: PaymentMethod
   amountPaid: string
   lastReceipt: { id: string; total: number; change_due: number; receipt_no: string } | null
@@ -14,7 +13,6 @@ interface CartState {
   removeItem: (key: string) => void
   clearCart: () => void
   setCustomer: (c: CartCustomer | null) => void
-  setDiscount: (v: number) => void
   setPaymentMethod: (m: PaymentMethod) => void
   setAmountPaid: (v: string) => void
   setLastReceipt: (r: { id: string; total: number; change_due: number; receipt_no: string } | null) => void
@@ -23,7 +21,6 @@ interface CartState {
 export const useCart = create<CartState>((set) => ({
   items: [],
   customer: null,
-  discount: 0,
   paymentMethod: 'cash',
   amountPaid: '',
   lastReceipt: null,
@@ -54,16 +51,19 @@ export const useCart = create<CartState>((set) => ({
     })),
 
   removeItem: (key) => set((state) => ({ items: state.items.filter((i) => i.key !== key) })),
-  clearCart: () => set({ items: [], discount: 0, amountPaid: '', customer: null, lastReceipt: null }),
+  clearCart: () => set({ items: [], amountPaid: '', customer: null, lastReceipt: null }),
   setCustomer: (customer) => set({ customer }),
-  setDiscount: (v) => set({ discount: Math.max(0, v) }),
   setPaymentMethod: (m) => set({ paymentMethod: m }),
   setAmountPaid: (v) => set({ amountPaid: v }),
   setLastReceipt: (r) => set({ lastReceipt: r }),
 }))
 
-export function cartTotals(items: CartItem[], discount: number) {
+/**
+ * Cart totals. There is no discount parameter on purpose: discounts are issued
+ * and approved by the administrator only, so the POS always prices at full
+ * value (any discount payload is refused server-side).
+ */
+export function cartTotals(items: CartItem[]) {
   const subtotal = items.reduce((s, i) => s + i.unit_price * i.qty, 0)
-  const capped = Math.max(0, Math.min(discount, subtotal))
-  return { subtotal, discount: capped, total: subtotal - capped }
+  return { subtotal, total: subtotal }
 }

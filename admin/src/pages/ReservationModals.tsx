@@ -228,6 +228,12 @@ export function ReserveBikeModal({ onClose, onDone }: { onClose: () => void; onD
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loadingData, setLoadingData] = useState(true)
   const [customerQuery, setCustomerQuery] = useState('')
+  // Radio choice mirrors the POS checkout modal: pick a registered customer
+  // from the database, or type a walk-in's name + phone directly (the server
+  // creates/attaches them at submit, so cash buyers can reserve too).
+  const [customerMode, setCustomerMode] = useState<'registered' | 'new'>('registered')
+  const [newName, setNewName] = useState('')
+  const [newPhone, setNewPhone] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -266,7 +272,11 @@ export function ReserveBikeModal({ onClose, onDone }: { onClose: () => void; onD
     const tp = Number(form.total_price)
     const dp = Number(form.down_payment)
     if (!form.bike_id) return setError('Select a bike')
-    if (!form.customer_id) return setError('Select a customer')
+    if (customerMode === 'registered') {
+      if (!form.customer_id) return setError('Select a customer')
+    } else if (!newName.trim() || !newPhone.trim()) {
+      return setError('Customer name and phone are required')
+    }
     if (!Number.isFinite(tp) || tp <= 0) return setError('Total price must be greater than 0')
     if (!Number.isFinite(dp) || dp <= 0) return setError('Down payment must be greater than 0')
     if (dp > tp) return setError('Down payment cannot exceed total price')
@@ -274,7 +284,9 @@ export function ReserveBikeModal({ onClose, onDone }: { onClose: () => void; onD
     try {
       await api.createReservation({
         bike_id: form.bike_id,
-        customer_id: form.customer_id,
+        ...(customerMode === 'new'
+          ? { customer_name: newName.trim(), customer_phone: newPhone.trim() }
+          : { customer_id: form.customer_id }),
         total_price: tp,
         down_payment: dp,
         plan_months: Number(form.plan_months) || 0,
@@ -312,7 +324,55 @@ export function ReserveBikeModal({ onClose, onDone }: { onClose: () => void; onD
           )}
 
           <Field label="Customer *">
-            {form.customer_id ? (
+            {/* Radio row mirrors the POS checkout modal: pull from the database,
+                or type a walk-in's details straight in. */}
+            <div className="flex flex-wrap gap-4 mb-2">
+              <label className="flex items-center gap-2 cursor-pointer group">
+                <input
+                  type="radio"
+                  name="reserve-customer-type"
+                  checked={customerMode === 'registered'}
+                  onChange={() => {
+                    setCustomerMode('registered')
+                    setNewName('')
+                    setNewPhone('')
+                  }}
+                  className="w-4 h-4 text-brand-500 border-slate-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
+                />
+                <span className="text-xs font-semibold text-slate-300 group-hover:text-white transition">Registered customer</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer group">
+                <input
+                  type="radio"
+                  name="reserve-customer-type"
+                  checked={customerMode === 'new'}
+                  onChange={() => {
+                    setCustomerMode('new')
+                    setForm((f) => ({ ...f, customer_id: '' }))
+                  }}
+                  className="w-4 h-4 text-brand-500 border-slate-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
+                />
+                <span className="text-xs font-semibold text-slate-300 group-hover:text-white transition">New customer</span>
+              </label>
+            </div>
+            {customerMode === 'new' ? (
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  className="input"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="Name"
+                  required
+                />
+                <input
+                  className="input"
+                  value={newPhone}
+                  onChange={(e) => setNewPhone(e.target.value)}
+                  placeholder="Phone"
+                  required
+                />
+              </div>
+            ) : form.customer_id ? (
               <div className="flex items-center justify-between bg-[#0b0e13] rounded-lg px-3 py-2 border border-slate-800/60">
                 <span className="text-white">{selectedCustomer?.full_name}</span>
                 <button className="text-xs text-brand-300 underline" type="button" onClick={() => setForm((f) => ({ ...f, customer_id: '' }))}>
@@ -330,7 +390,7 @@ export function ReserveBikeModal({ onClose, onDone }: { onClose: () => void; onD
                 <div className="border border-slate-800/60 rounded-lg overflow-hidden max-h-40 mt-1">
                   {customerMatches.length === 0 ? (
                     <p className="p-2 text-xs text-slate-500">
-                      No matches. Add the customer on the Customers page first.
+                      No matches — switch to <span className="text-slate-300">New customer</span> above to add them now.
                     </p>
                   ) : (
                     customerMatches.map((c) => (

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import { dateTime, timeAgo } from '../lib/format'
 import type { ActivationCode, PosPermission, User } from '../lib/types'
@@ -6,16 +6,70 @@ import { Badge, EmptyState, PageHeader, Spinner } from '../components/ui'
 import { cn } from '../lib/cn'
 import { Field, Modal } from './InventoryPage'
 
-/** Extra POS capabilities offered on the code form (server whitelists these too) */
-const PERM_OPTIONS: { id: PosPermission; label: string; hint: string }[] = [
-  { id: 'inventory_entry', label: 'Inventory entry', hint: 'Add / edit products and adjust stock on the POS' },
+/**
+ * Grantable POS capabilities, grouped like the server catalog
+ * (`GET /api/admin/permissions`, `server/src/permissions/catalog.js`). Ticking
+ * one lets an operator do manager-only work without making them a manager; the
+ * server whitelists exactly these ids. Selling and credit requests are the
+ * operator baseline (shown locked / always on), finalizing and settling credit
+ * sales are manager-by-default and tickable per person, and discounts are
+ * admin-only (never grantable).
+ */
+const PERM_GROUPS: { group: string; options: { id: PosPermission; label: string; hint: string; baseline?: boolean }[] }[] = [
+  {
+    group: 'Credit',
+    options: [
+      { id: 'credit_request', label: 'Send credit-sale requests', hint: 'Always on for every POS role — a request always waits for admin approval', baseline: true },
+      { id: 'credit_finalize', label: 'Finalize approved credit sales', hint: 'Deduct stock and open the debt — manager by default' },
+      { id: 'credit_settle', label: 'Record credit settlements', hint: 'Money-in against an outstanding credit debt — manager by default' },
+      { id: 'installment_collect', label: 'Record reservation installments', hint: 'Money-in against an active bike reservation' },
+    ],
+  },
+  {
+    group: 'Reservations',
+    options: [
+      { id: 'reservation_create', label: 'Create reservations', hint: 'Take a down payment and lock the bike VIN' },
+      { id: 'reservation_complete', label: 'Complete reservations', hint: 'Turn a fully paid reservation into a sale' },
+      { id: 'reservation_release', label: 'Release reservations', hint: 'Bike returns to stock — still needs an admin approval' },
+    ],
+  },
+  {
+    group: 'Stock',
+    options: [
+      { id: 'inventory_receive', label: 'Receive stock', hint: 'Record consignments, create new SKUs and start a standalone restock — the whole receive flow' },
+      { id: 'reorder_create', label: 'Create reorder lists', hint: 'Draft what to order next — never changes stock' },
+      { id: 'reorder_manage', label: 'Manage reorder lists', hint: 'Mark a list processed / fulfilled / cancelled' },
+    ],
+  },
 ]
+
+const PERM_OPTIONS = PERM_GROUPS.flatMap((g) => g.options)
+/** Human label for a stored grant (legacy ids fall back to a de-underscored id). */
+const PERM_LABELS = new Map<string, string>(PERM_OPTIONS.map((p) => [p.id, p.label]))
+
+/** Values stored before the catalog existed, expanded like the server does. */
+const LEGACY_EXPANSIONS: Partial<Record<string, PosPermission[]>> = {
+  inventory_entry: ['inventory_receive', 'reorder_manage'],
+}
+
+/**
+ * Stored grants with legacy aliases expanded, de-duplicated and filtered to the
+ * ids the UI actually renders — so an old `inventory_entry` row still shows its
+ * stock checkboxes as ticked, while ids folded into another capability (e.g.
+ * `product_create`, now part of receiving) disappear instead of lingering.
+ */
+function visibleGrants(perms?: PosPermission[]): PosPermission[] {
+  return [...new Set(expandGrants(perms))].filter((p) => PERM_LABELS.has(p))
+}
+function expandGrants(perms?: PosPermission[]): PosPermission[] {
+  return (perms ?? []).flatMap((p) => LEGACY_EXPANSIONS[p] ?? [p])
+}
 
 export default function TeamPage() {
   const [users, setUsers] = useState<User[] | null>(null)
   const [codes, setCodes] = useState<ActivationCode[] | null>(null)
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ label: '', role: 'cashier', days: '7', permissions: [] as PosPermission[] })
+  const [form, setForm] = useState({ label: '', role: 'operator', days: '7', permissions: [] as PosPermission[] })
   const [lastCode, setLastCode] = useState<string | null>(null)
   const [lastCodePerms, setLastCodePerms] = useState<PosPermission[]>([])
   const [copied, setCopied] = useState(false)
@@ -43,7 +97,7 @@ export default function TeamPage() {
     setLastCodePerms(r.code.permissions || [])
     setCopied(false)
     setShowForm(false)
-    setForm({ label: '', role: 'cashier', days: '7', permissions: [] })
+    setForm({ label: '', role: 'operator', days: '7', permissions: [] })
     load()
   }
 
@@ -59,13 +113,19 @@ export default function TeamPage() {
     load()
   }
 
-  /** Grant or revoke POS inventory entry for an already-registered operator. */
-  async function toggleInventoryEntry(u: User) {
-    const has = (u.permissions || []).includes('inventory_entry')
+  /**
+   * Grant or revoke one POS capability for a team member. The server reloads the
+   * user on every request, so the POS picks the change up without a re-login.
+   */
+  async function toggleStaffPerm(u: User, id: PosPermission) {
+    // Expand legacy aliases first: the server rewrites them to their modern
+    // ids anyway, so ticking one stock box on an old `inventory_entry` row
+    // cleanly replaces the alias instead of piling grants on top of it.
+    const perms = expandGrants(u.permissions)
+    const next = perms.includes(id) ? perms.filter((x) => x !== id) : [...perms, id]
     setPermBusyId(u.id)
     try {
-      await api.updateUser(u.id, { permissions: has ? [] : ['inventory_entry'] })
-      await load()
+      await updateStaffPerms(u, next)
     } finally {
       setPermBusyId(null)
     }
@@ -102,7 +162,7 @@ export default function TeamPage() {
     <div>
       <PageHeader
         title="Team & Activation Codes"
-        subtitle="Operators register with a code you generate; grant inventory entry to anyone already on the team"
+        subtitle="Operators register with a code you generate; elevate a trusted operator's rights from their card — no promotion needed"
         actions={<button className="btn-primary" onClick={() => setShowForm(true)}>+ Generate code</button>}
       />
 
@@ -173,12 +233,16 @@ export default function TeamPage() {
                               Administrator
                             </span>
                           )}
-                          {(u.permissions || []).includes('inventory_entry') ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-sky-500/30 bg-sky-500/15 text-sky-300">
+                          {visibleGrants(u.permissions).map((p) => (
+                            <span
+                              key={p}
+                              className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border border-sky-500/30 bg-sky-500/15 text-sky-300"
+                            >
                               <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
-                              Inventory entry
+                              {PERM_LABELS.get(p) ?? p.replace(/_/g, ' ')}
                             </span>
-                          ) : (
+                          ))}
+                          {u.role !== 'admin' && visibleGrants(u.permissions).length === 0 && (
                             <span className="text-[11px] text-slate-500">No extra POS rights</span>
                           )}
                         </div>
@@ -215,8 +279,8 @@ export default function TeamPage() {
                 {codes.map((c) => (
                   <tr key={c.id}>
                     <td className="td">
-                      <button className="font-mono text-xs text-brand-300 hover:underline" onClick={() => copy(c.code, c.id)} title="Click to copy">
-                        {copiedId === c.id ? '✓ Copied' : c.code}
+                      <button className="font-mono text-xs text-brand-300 hover:underline" onClick={() => copy(c.code)} title="Click to copy">
+                        {c.code}
                       </button>
                       {c.label && <div className="text-[11px] text-slate-500">{c.label}</div>}
                     </td>
@@ -224,9 +288,9 @@ export default function TeamPage() {
                       <Badge>{c.role}</Badge>
                       {(c.permissions?.length ?? 0) > 0 && (
                         <div className="mt-1">
-                          {c.permissions!.map((p) => (
+                          {visibleGrants(c.permissions).map((p) => (
                             <span key={p} className="inline-block text-[10px] px-1.5 py-0.5 mr-1 rounded-md bg-sky-500/15 text-sky-300 border border-sky-500/20">
-                              {p.replace('_', ' ')}
+                              {PERM_LABELS.get(p) ?? p.replace(/_/g, ' ')}
                             </span>
                           ))}
                         </div>
@@ -258,9 +322,8 @@ export default function TeamPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Role">
                 <select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-                  <option value="cashier">Cashier (POS)</option>
+                  <option value="operator">Operator (POS)</option>
                   <option value="manager">Manager</option>
-                  <option value="mechanic">Mechanic</option>
                 </select>
               </Field>
               <Field label="Valid for (days)"><input className="input" type="number" value={form.days} onChange={(e) => setForm({ ...form, days: e.target.value })} /></Field>
@@ -268,11 +331,12 @@ export default function TeamPage() {
             <Field label="Extra POS permissions (what this user can do beyond their role)">
               <div className="space-y-2">
                 {PERM_OPTIONS.map((p) => (
-                  <label key={p.id} className="flex items-start gap-2.5 p-2.5 rounded-lg border border-slate-800/70 hover:border-slate-700 cursor-pointer">
+                  <label key={p.id} className={cn('flex items-start gap-2.5 p-2.5 rounded-lg border border-slate-800/70', p.baseline ? 'cursor-default' : 'hover:border-slate-700 cursor-pointer')}>
                     <input
                       type="checkbox"
                       className="accent-brand-500 mt-0.5"
-                      checked={form.permissions.includes(p.id)}
+                      disabled={p.baseline}
+                      checked={p.baseline || form.permissions.includes(p.id)}
                       onChange={() => togglePerm(p.id)}
                     />
                     <span>
@@ -317,21 +381,40 @@ export default function TeamPage() {
               <div className="text-xs text-slate-600 mt-3">Last login: {staffDetail.last_login_at ? timeAgo(staffDetail.last_login_at) : 'Never'} · Created: {dateTime(staffDetail.created_at)}</div>
             </div>
 
-            {/* Elevate rights */}
+            {/* Elevate rights — the grantable catalog, ticked per person */}
             <div className="space-y-3">
               <div className="text-sm font-semibold text-white">Elevate rights</div>
-              <Field label="POS inventory entry">
-                <button className="btn-ghost w-full text-xs justify-start" disabled={permBusyId === staffDetail.id} onClick={() => toggleInventoryEntry(staffDetail)}>
-                  {staffDetail.permissions?.includes('inventory_entry') ? (
-                    <span className="inline-flex items-center gap-1.5 text-sky-300">
-                      <span className="h-2 w-2 rounded-full bg-sky-400" />
-                      Granted — can enter products and adjust stock
-                    </span>
-                  ) : (
-                    <span className="text-slate-400">Revoked — standard cashier only</span>
-                  )}
-                </button>
-              </Field>
+              {staffDetail.role === 'admin' ? (
+                <p className="text-xs text-slate-500">Administrators already hold every POS capability — nothing to grant.</p>
+              ) : (
+                <>
+                  <p className="text-xs text-slate-500">
+                    Tick what this member can do beyond their role — the POS picks the change up on their next request, no new code needed.
+                  </p>
+                  {PERM_GROUPS.map((g) => (
+                    <div key={g.group}>
+                      <div className="text-[11px] uppercase tracking-wider text-slate-500 mb-1.5">{g.group}</div>
+                      <div className="space-y-2">
+                        {g.options.map((p) => (
+                          <label key={p.id} className={cn('flex items-start gap-2.5 p-2.5 rounded-lg border border-slate-800/70', p.baseline ? 'cursor-default' : 'hover:border-slate-700 cursor-pointer')}>
+                            <input
+                              type="checkbox"
+                              className="accent-brand-500 mt-0.5"
+                              disabled={p.baseline || permBusyId === staffDetail.id}
+                              checked={p.baseline || expandGrants(staffDetail.permissions).includes(p.id)}
+                              onChange={() => toggleStaffPerm(staffDetail, p.id)}
+                            />
+                            <span>
+                              <span className="text-sm text-slate-200 font-medium">{p.label}</span>
+                              <span className="block text-xs text-slate-500">{p.hint}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
 
                         {staffDetail.role !== 'admin' && (
@@ -341,7 +424,13 @@ export default function TeamPage() {
                   <div className="text-sm font-semibold text-white">POS access</div>
                   <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
                     <button className="btn-ghost w-full sm:w-auto" disabled={permBusyId === staffDetail.id} onClick={() => updateStaffActive(staffDetail, false)}>Deactivate POS access</button>
-                    <button className="btn-primary w-full sm:w-auto" disabled={permBusyId === staffDetail.id} onClick={() => updateStaffActive(staffDetail, true)}>{staffDetail.is_active ? 'Close' : 'Reactivate'}</button>
+                    <button
+                      className="btn-primary w-full sm:w-auto"
+                      disabled={permBusyId === staffDetail.id}
+                      onClick={() => (staffDetail.is_active ? setStaffDetail(null) : updateStaffActive(staffDetail, true))}
+                    >
+                      {staffDetail.is_active ? 'Close' : 'Reactivate'}
+                    </button>
                   </div>
                 </div>
               </>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/database'
-import { api, getStoredUser } from '../lib/api'
+import { api, can, getStoredUser } from '../lib/api'
 import { dateTime, PAYMENT_LABELS, ugx } from '../lib/format'
 import type { Bike, BikeReservation } from '../lib/types'
 import { cn } from '../lib/cn'
@@ -68,7 +68,14 @@ export default function ReservationsModal({
   onFlash?: (msg: string) => void
 }) {
   const user = getStoredUser()!
-  const canRelease = user.role !== 'operator' || (user.permissions || []).includes('inventory_entry')
+  // Instalments, completion and release are manager work (admin can elevate an
+  // operator with the matching grant) — same catalog the server enforces.
+  const canPay = can('installment_collect', user)
+  const canComplete = can('reservation_complete', user)
+  const canRelease = can('reservation_release', user)
+  // Creating a reservation is its own grant: a finance clerk who may only
+  // collect installments sees the list, not the "New reservation" buttons.
+  const canCreate = can('reservation_create', user)
   const [view, setView] = useState<'list' | 'reserve' | 'detail'>(prefillBike ? 'reserve' : 'list')
   const [detailId, setDetailId] = useState<string | null>(null)
   const [reservations, setReservations] = useState<BikeReservation[] | null>(null)
@@ -109,7 +116,7 @@ export default function ReservationsModal({
         />
       )}
 
-      {view === 'reserve' && (
+      {view === 'reserve' && canCreate && (
         <ReserveForm
           prefillBike={prefillBike}
           onDone={(msg) => {
@@ -124,9 +131,12 @@ export default function ReservationsModal({
       {view === 'detail' && detailId && (
         <DetailPane
           id={detailId}
+          canPay={canPay}
+          canComplete={canComplete}
           canRelease={canRelease}
           onChanged={load}
           onBack={() => setView('list')}
+          onFlash={onFlash}
         />
       )}
     </Shell>
@@ -145,6 +155,8 @@ function ListPane({
   onOpen: (id: string) => void
 }) {
   const mobile = isMobileDevice()
+  // Creating a reservation is its own grant (list browsing is harmless).
+  const canCreate = can('reservation_create')
   return (
     <div>
       {/* Filters — same responsive structure as Sales/Bikes:
@@ -182,9 +194,11 @@ function ListPane({
         </form>
       </div>
 
-      <button className="btn-primary w-full sm:w-auto mb-4" onClick={onNew}>
-        + New reservation
-      </button>
+      {canCreate && (
+        <button className="btn-primary w-full sm:w-auto mb-4" onClick={onNew}>
+          + New reservation
+        </button>
+      )}
 
       {reservations === null ? (
         <div className="text-center text-sm text-slate-500 py-10">Loading…</div>
@@ -412,20 +426,50 @@ function FieldWrap({ label, children }: { label: string; children: React.ReactNo
 /** One reservation: summary, payment history, record-installment form, actions. */
 function DetailPane({
   id,
+  canPay,
+  canComplete,
   canRelease,
   onChanged,
   onBack,
+  onFlash,
 }: {
   id: string
+  canPay: boolean
+  canComplete: boolean
   canRelease: boolean
   onChanged: () => void
   onBack: () => void
+  onFlash?: (msg: string) => void
 }) {
   const [reservation, setReservation] = useState<BikeReservation | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [pay, setPay] = useState({ amount: '', payment_method: 'cash', transaction_ref: '', note: '' })
   const [busy, setBusy] = useState<string | null>(null)
+
+  // 10-second re-arm window after a successful payment: the form (and its
+  // submit) lock so a double-tap / kiosk ghost-click can never record the same
+  // installment twice. The deadline is mirrored in sessionStorage so it
+  // survives navigating to the list and back within the window. The OS/SW
+  // "✅ recorded" toast is fired by the server push (installmentSelf /
+  // installmentReceived) — this is only the local heartbeat.
+  const rearmKey = `spiro_pay_rearm:${id}`
+  const [rearmUntil, setRearmUntil] = useState<number>(() => {
+    const v = typeof sessionStorage !== 'undefined' ? Number(sessionStorage.getItem(rearmKey) || 0) : 0
+    return v > Date.now() ? v : 0
+  })
+  const [, tick] = useState(0)
+  useEffect(() => {
+    if (!rearmUntil) return
+    const t = setInterval(() => {
+      if (Date.now() >= rearmUntil) {
+        sessionStorage.removeItem(rearmKey)
+        setRearmUntil(0)
+      } else tick((n) => n + 1)
+    }, 250)
+    return () => clearInterval(t)
+  }, [rearmUntil, rearmKey])
+  const rearmLeft = rearmUntil ? Math.max(0, Math.ceil((rearmUntil - Date.now()) / 1000)) : 0
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -450,6 +494,7 @@ function DetailPane({
   async function recordPayment(e: React.FormEvent) {
     e.preventDefault()
     setError('')
+    if (rearmLeft > 0) return // heartbeat window — this payment already recorded
     const amt = Number(pay.amount)
     if (!Number.isFinite(amt) || amt <= 0) return setError('Amount must be greater than 0')
     if (amt > balance) return setError(`Amount exceeds the outstanding balance (${ugx(balance)})`)
@@ -464,6 +509,12 @@ function DetailPane({
       setPay({ amount: '', payment_method: 'cash', transaction_ref: '', note: '' })
       await load()
       onChanged()
+      // Arm the 10s heartbeat: lock the form so the same payment can't be
+      // double-recorded; it clears itself when the countdown expires.
+      const until = Date.now() + 10_000
+      sessionStorage.setItem(rearmKey, String(until))
+      setRearmUntil(until)
+      onFlash?.(`✓ Installment recorded — ${ugx(amt)}`)
       if (r.balance <= 0.01) setError('') // fully paid — bike marked sold
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Payment failed')
@@ -545,7 +596,7 @@ function DetailPane({
         )}
       </div>
 
-      {active && balance > 0 && (
+      {active && balance > 0 && canPay && (
         <form onSubmit={recordPayment} className="space-y-2 border-t border-slate-800/70 pt-3">
           <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Record installment</div>
           <FieldWrap label="Amount (UGX)">
@@ -564,9 +615,14 @@ function DetailPane({
               <input className="input" value={pay.transaction_ref} onChange={(e) => setPay((p) => ({ ...p, transaction_ref: e.target.value }))} placeholder="Receipt no." />
             </FieldWrap>
           </div>
-          <button className="btn-primary w-full" disabled={busy === 'pay' || !online}>
-            {busy === 'pay' ? 'Saving…' : !online ? 'Offline — reconnect to record' : 'Save payment'}
+          <button className="btn-primary w-full" disabled={busy === 'pay' || !online || rearmLeft > 0}>
+            {busy === 'pay' ? 'Saving…' : !online ? 'Offline — reconnect to record' : rearmLeft > 0 ? '✓ Recorded — re-arming…' : 'Save payment'}
           </button>
+          {rearmLeft > 0 && (
+            <p className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2 text-center">
+              ✓ Recorded — re-arming in {rearmLeft}s
+            </p>
+          )}
         </form>
       )}
 
@@ -574,7 +630,7 @@ function DetailPane({
 
       <div className="flex gap-2 pt-1">
         <button className="btn-ghost flex-1" onClick={onBack}>Back</button>
-        {active && balance <= 0 && (
+        {active && balance <= 0 && canComplete && (
           <button className="btn-primary flex-1" disabled={busy === 'complete' || !online} onClick={complete}>
             {busy === 'complete' ? '…' : 'Complete'}
           </button>

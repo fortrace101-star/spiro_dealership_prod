@@ -146,7 +146,15 @@ export default function SettingsPage() {
             <li>• <strong>Stock-outs</strong> — a product hits zero stock</li>
             <li>• <strong>Approval requests</strong> — discounts above 5% and credit sales that need a manager's decision</li>
             <li>• <strong>Daily revenue records</strong> — when today's revenue breaks the all-time high</li>
+            <li>• <strong>Reservations & installments</strong> — new reservations (with down payment), every installment received, and paid-off milestones</li>
+            <li>• <strong>Release decisions</strong> — POS release requests and the approve/reject outcome sent back to them</li>
+            <li>• <strong>Credit lifecycle</strong> — finalize, settlement payments and rejections confirmed at the POS</li>
+            <li>• <strong>Reorder updates</strong> — when a reorder list is processed or fulfilled</li>
+            <li>• <strong>Team changes</strong> — permission grants issued to your account</li>
           </ul>
+          <p className="text-xs text-slate-500 mb-4">
+            Every alert is also saved to the <strong className="text-slate-300">bell inbox</strong> (top-right) — history survives even when this device misses a push.
+          </p>
           <div className="flex gap-2">
             {push.state !== 'subscribed' && (
               <button className="btn-primary" onClick={() => push.enable()} disabled={push.busy}>

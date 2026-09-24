@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api'
-import { compactUgx, dateTime, num, timeAgo, ugx } from '../lib/format'
+import { compactUgx, dateOnly, dateTime, num, timeAgo, ugx } from '../lib/format'
 import type { Product, PurchasingRecord } from '../lib/types'
 import { EmptyState, PageHeader, Spinner, StockChip } from '../components/ui'
 import { Field, Modal } from './InventoryPage'
 import ReceiveStockModal from '../components/ReceiveStockModal'
-import { printHtml, escapeHtml } from '../lib/print'
+import { PdfWriter } from '../lib/pdf'
 import { usePageSize } from '../lib/usePageSize'
 
 interface Line {
@@ -35,32 +35,153 @@ function txnId(): string {
   })
 }
 
-/** Renders the open detail record (reorder list or consignment) into a printable PDF document. */
-function printDetail(tab: 'reorders' | 'consignments', d: PurchasingRecord): void {
+/** Renders the open detail record (reorder list or consignment) into a real PDF
+ *  file and downloads it — one click, no print dialog (lib/pdf.ts pipeline).
+ *  Reorder lists use the house filename standard, which needs a per-day
+ *  sequence counter computed from every list issued that day. */
+async function downloadDetail(
+  tab: 'reorders' | 'consignments',
+  d: PurchasingRecord,
+  loadedRecords: PurchasingRecord[],
+): Promise<void> {
   const isReorder = tab === 'reorders'
-  const rows = d.items
-    .map((i) => {
-      const unit = Number(i.unit_cost) || 0
-      const qty = Number(i.qty) || 0
-      const isNew = (i as { new_product?: unknown }).new_product
-      return `<tr><td>${escapeHtml(i.sku || '')}</td><td>${escapeHtml(i.name || '')}${isNew ? ' <em>(new)</em>' : ''}</td><td class="num">${qty}</td><td class="num">${unit.toLocaleString('en-UG')}</td><td class="num">${(qty * unit).toLocaleString('en-UG')}</td></tr>`
-    })
-    .join('')
+  const title = isReorder ? d.title || 'Reorder list' : `Received ${d.reference || 'consignment'}`
+  const meta = [
+    isReorder ? 'Reorder list' : 'Received consignment',
+    `prepared by ${d.created_by_name || '—'}`,
+    dateTime(d.created_at),
+    d.notes ? `Notes: ${d.notes}` : '',
+    !isReorder && (d.source_list_title || d.source_list_id) ? `Fulfills: ${d.source_list_title || 'Reorder list'}` : '',
+    d.supplier ? `Supplier: ${d.supplier}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  const rows = d.items.map((i) => {
+    const unit = Number(i.unit_cost) || 0
+    const qty = Number(i.qty) || 0
+    const isNew = (i as { new_product?: unknown }).new_product
+    return [i.sku || '', `${i.name || ''}${isNew ? ' (new)' : ''}`, String(qty), ugx(unit), ugx(qty * unit)]
+  })
+
   const value = d.items.reduce((s, i) => s + Number(i.qty) * (Number(i.unit_cost) || 0), 0)
   const delivery = Number(d.delivery_cost || 0)
-  const title = isReorder ? d.title || 'Reorder list' : `Received ${d.reference || 'consignment'}`
-  let totals = `<tr><td colspan="4">Total (${d.items.length} line${d.items.length === 1 ? '' : 's'})</td><td class="num">${value.toLocaleString('en-UG')}</td></tr>`
+  const totals: string[][] = [[`Total (${d.items.length} line${d.items.length === 1 ? '' : 's'})`, '', '', '', ugx(value)]]
   if (!isReorder) {
-    totals += `<tr><td colspan="4">Delivery</td><td class="num">${delivery.toLocaleString('en-UG')}</td></tr>`
-    totals += `<tr><td colspan="4">Landed total</td><td class="num">${(value + delivery).toLocaleString('en-UG')}</td></tr>`
+    totals.push(['Delivery', '', '', '', ugx(delivery)])
+    totals.push(['Landed total', '', '', '', ugx(value + delivery)])
   }
-  printHtml(
-    title,
-    `<h1>${escapeHtml(title)}</h1>
-<div class="meta">${isReorder ? 'Reorder list' : 'Received consignment'} · prepared by ${escapeHtml(d.created_by_name || '—')} · ${escapeHtml(dateTime(d.created_at))}${d.notes ? ` · ${escapeHtml(d.notes)}` : ''}${!isReorder && (d.source_list_title || d.source_list_id) ? ` · Fulfills: ${escapeHtml(d.source_list_title || 'Reorder list')}` : ''}</div>
-<table><thead><tr><th>SKU</th><th>Product</th><th class="num">Qty</th><th class="num">Unit cost</th><th class="num">Line total</th></tr></thead>
-<tbody>${rows}</tbody><tfoot>${totals}</tfoot></table>`,
-  )
+
+  let filename = downloadFilename(title, d.created_at)
+  if (isReorder) {
+    // The counter must reflect every reorder list issued that Kampala day —
+    // not just the rows visible under the active status filter — so refetch.
+    let dayRecords = loadedRecords
+    try {
+      dayRecords = (await api.reorders('all')).records
+    } catch {
+      // Refetch failed: fall back to the currently loaded rows.
+    }
+    filename = reorderFilename(d.created_at, dayCounter(dayRecords, d))
+  }
+
+  new PdfWriter(title)
+    .heading(meta)
+    .table({
+      columns: [
+        { label: 'SKU', width: 26 },
+        { label: 'Product' },
+        { label: 'Qty', align: 'right', width: 16 },
+        { label: 'Unit cost', align: 'right', width: 42 },
+        { label: 'Line total', align: 'right', width: 42 },
+      ],
+      rows,
+      totals,
+    })
+    .save(filename)
+}
+
+/** Calendar parts (day/month/year) of a timestamp in the shop's timezone
+ *  (Africa/Kampala); defaults to now when the timestamp is missing. */
+function kampalaParts(iso: string | null | undefined): { day: string; month: string; year: string } {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'numeric',
+    year: 'numeric',
+    timeZone: 'Africa/Kampala',
+  }).formatToParts(iso ? new Date(iso) : new Date())
+  const get = (t: string) => parts.find((p) => p.type === t)?.value || ''
+  return { day: get('day'), month: get('month'), year: get('year') }
+}
+
+// Fixed month table (not the locale) so abbreviations match in every browser/OS.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** House standard for reorder-list downloads:
+ *  "reorder - 21 Sep - 01 - 2026.pdf" — dd mmm from the issuance date, NN the
+ *  1-based sequence of the list among that Kampala day's reorder lists, yyyy
+ *  the issuance year. */
+function reorderFilename(createdAt: string | null | undefined, counter: string): string {
+  const { day, month, year } = kampalaParts(createdAt)
+  return `reorder - ${day} ${MONTHS[Number(month) - 1]} - ${counter} - ${year}.pdf`
+}
+
+/** 1-based, zero-padded sequence of `target` among the reorder lists issued on
+ *  the same Kampala calendar day, ordered by creation time ("01", "02", …). */
+function dayCounter(records: PurchasingRecord[], target: PurchasingRecord): string {
+  const key = (iso: string) => {
+    const p = kampalaParts(iso)
+    return `${p.year}-${p.month}-${p.day}`
+  }
+  const sameDay = records
+    .filter((r) => key(r.created_at) === key(target.created_at))
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+  const idx = sameDay.findIndex((r) => r.id === target.id)
+  // A missing id shouldn't happen (the modal opens from the loaded table);
+  // treat it as the next slot so the file still gets a valid number.
+  return String((idx === -1 ? sameDay.length : idx) + 1).padStart(2, '0')
+}
+
+/** Consignment download name: its title plus a short "24 Sep - 2026" stamp. */
+function downloadFilename(title: string, createdAt: string | null | undefined): string {
+  const safe = title.replace(/[<>:"/\\|?*]+/g, '').trim() || 'document'
+  const { day, month, year } = kampalaParts(createdAt)
+  return `${safe}-${day} ${MONTHS[Number(month) - 1]} - ${year}.pdf`
+}
+
+/** Builds the chat-friendly clipboard rendition for the Copy button: product
+ *  names and quantities only, footed by the item count and the list's date —
+ *  nothing else, so it pastes cleanly into a chat. */
+function reorderListText(d: PurchasingRecord): string {
+  const lines = d.items.map((i) => `${i.name || ''} × ${(Number(i.qty) || 0).toLocaleString('en-UG')}`)
+  return [...lines, '', `Items: ${d.items.length}`, `Date: ${dateOnly(d.created_at)}`].join('\n')
+}
+
+/** Clipboard write with a legacy fallback: navigator.clipboard only exists in
+ *  secure contexts, so plain-HTTP LAN deployments go through execCommand. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    // fall through to the legacy path
+  }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch {
+    return false
+  }
 }
 
 export default function ReordersPage() {
@@ -69,6 +190,8 @@ export default function ReordersPage() {
   const [records, setRecords] = useState<PurchasingRecord[] | null>(null)
   const [products, setProducts] = useState<Product[] | null>(null)
   const [showForm, setShowForm] = useState(false)
+  // Flip true for ~2s after a successful clipboard copy (Copy button feedback).
+  const [copied, setCopied] = useState(false)
   const [error, setError] = useState('')
   const [page, setPage] = useState(1)
   const pageSize = usePageSize()
@@ -279,7 +402,7 @@ export default function ReordersPage() {
           title={tab === 'reorders' ? (detail.title || 'Reorder list') : `Received ${detail.reference || 'consignment'}`}
           onClose={() => setDetail(null)}
         >
-          <p className="text-xs text-slate-500 -mt-2 mb-3 flex items-start justify-between gap-3">
+          <p className="text-xs text-slate-500 -mt-2 mb-3 flex flex-wrap items-start justify-between gap-3">
             <span>
               {tab === 'reorders' ? 'Reorder list' : 'Received Stock'} · by {detail.created_by_name || '—'} · {dateTime(detail.created_at)}
               {/* Supplier is a hidden table column on phones, so the modal must carry it. */}
@@ -289,12 +412,33 @@ export default function ReordersPage() {
               )}
               {detail.notes ? ` · ${detail.notes}` : ''}
             </span>
-            <button
-              className="shrink-0 text-[11px] px-2.5 py-1 rounded-md border border-slate-700 text-slate-300 hover:border-brand-500/60 hover:text-brand-300"
-              onClick={() => printDetail(tab, detail)}
-            >
-              Print / PDF
-            </button>
+            <span className="shrink-0 flex items-center gap-2">
+              {/* Copy is reorder-list specific: the text rendition is what gets
+                  pasted into chats when sourcing the items. */}
+              {tab === 'reorders' && (
+                <button
+                  className="text-[11px] px-2.5 py-1 rounded-md border border-slate-700 text-slate-300 hover:border-brand-500/60 hover:text-brand-300"
+                  title="Copy the item list for pasting into a chat"
+                  disabled={copied}
+                  onClick={async () => {
+                    if (await copyText(reorderListText(detail))) {
+                      setCopied(true)
+                      window.setTimeout(() => setCopied(false), 2000)
+                    }
+                  }}
+                >
+                  {copied ? 'Copied ✓' : 'Copy'}
+                </button>
+              )}
+              <button
+                className="text-[11px] px-2.5 py-1 rounded-md border border-slate-700 text-slate-300 hover:border-brand-500/60 hover:text-brand-300"
+                onClick={() => {
+                  void downloadDetail(tab, detail, records || [])
+                }}
+              >
+                Download PDF
+              </button>
+            </span>
           </p>
           <div className="overflow-x-auto card">
             <table className="w-full">

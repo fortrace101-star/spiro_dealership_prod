@@ -7,10 +7,18 @@ const TOKEN_KEY = 'spiro_pos_token'
 const USER_KEY = 'spiro_pos_user'
 const DEVICE_KEY = 'spiro_pos_device_id'
 
+/**
+ * Fired (server message in `detail.message`) when a request is rejected with a
+ * 401 while we still hold a session — the admin deactivated the account or the
+ * token expired. The app shell listens and drops back to the sign-in screen.
+ * Failed sign-ins have no token and never fire it.
+ */
+export const SESSION_EXPIRED_EVENT = 'spiro:session-expired'
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
 }
-export function setSession(token: string, user: { id: string; full_name: string; role: string }) {
+export function setSession(token: string, user: SessionUser) {
   localStorage.setItem(TOKEN_KEY, token)
   localStorage.setItem(USER_KEY, JSON.stringify(user))
 }
@@ -27,6 +35,20 @@ export function getStoredUser(): SessionUser | null {
   }
 }
 
+/**
+ * Capability check for POS UI gating.
+ *
+ * The server is the authority — every route re-checks the same permission — this
+ * only decides what the terminal offers. We test `effective_permissions` (role
+ * baseline ∪ admin grants) so a manager-only operation (receiving, reservations,
+ * installments) stays hidden for a plain operator and appears the moment the
+ * admin grants it. Call `api.me()` to refresh after a grant/revoke.
+ */
+export function can(permission: string, user: SessionUser | null = getStoredUser()): boolean {
+  if (!user) return false
+  return (user.effective_permissions || []).includes(permission)
+}
+
 /** Stable per-terminal device id */
 export function getDeviceId(): string {
   let id = localStorage.getItem(DEVICE_KEY)
@@ -36,6 +58,29 @@ export function getDeviceId(): string {
     localStorage.setItem(DEVICE_KEY, id)
   }
   return id
+}
+
+/** Row of the durable cross-app inbox (shared with the admin dashboard). */
+export interface AppNotification {
+  id: string
+  kind: string
+  title: string
+  body: string
+  url: string | null
+  tag: string | null
+  payload: Record<string, unknown>
+  read_at: string | null
+  created_at: string
+}
+
+/** Carries the HTTP status so callers can react to specific codes (e.g. 409). */
+export class ApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
 }
 
 async function request<T>(path: string, options: RequestInit = {}, timeoutMs = 12000): Promise<T> {
@@ -59,8 +104,17 @@ async function request<T>(path: string, options: RequestInit = {}, timeoutMs = 1
     }
     if (!res.ok) {
       const msg = (body as { error?: string })?.error || `Request failed (${res.status})`
-      if (res.status === 401) clearSession()
-      throw new Error(msg)
+      if (res.status === 401) {
+        // A 401 while a token was attached means the session was revoked
+        // (admin deactivated POS access) or it expired: clear the local
+        // session and tell the app shell to log out immediately.
+        const hadSession = Boolean(token)
+        clearSession()
+        if (hadSession) {
+          window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT, { detail: { message: msg } }))
+        }
+      }
+      throw new ApiError(msg, res.status)
     }
     return body as T
   } finally {
@@ -180,6 +234,13 @@ export interface PurchasingRecord {
 export const api = {
   health: () => request<{ ok: boolean }>('/api/health', {}, 5000),
 
+  /**
+   * Public first-launch probe: true while the install has no administrator
+   * (fresh or just-wiped database). Activation codes cannot exist yet in that
+   * state, so the terminal must say so instead of rejecting every code.
+   */
+  setupStatus: () => request<{ setup_required: boolean }>('/api/setup/status', {}, 5000),
+
   login: (email: string, password: string) =>
     request<{ token: string; user: SessionUser }>('/api/auth/login', {
       method: 'POST',
@@ -192,13 +253,26 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  /**
+   * Refresh the session profile (role baseline ∪ grants). The Team page can
+   * change an operator's grants at any moment; the next call re-reads them.
+   */
+  me: () => request<{ user: SessionUser }>('/api/auth/me'),
+
   bootstrap: () => request<SyncPayload>('/api/sync/bootstrap'),
   changes: (since: number) => request<SyncPayload>(`/api/sync/changes?since=${since}`),
   push: (sales: unknown[]) =>
     request<PushResult>('/api/sync/push', { method: 'POST', body: JSON.stringify({ sales }) }),
 
   purchasingCatalog: () =>
-    request<{ products: PurchasingProduct[]; can_receive: boolean }>('/api/purchasing/catalog'),
+    request<{
+      products: PurchasingProduct[]
+      can_receive: boolean
+      /** Legacy flag — mirrors `can_receive` (inline product creation is part of receiving). */
+      can_create_products: boolean
+      can_reorder: boolean
+      can_manage_reorders: boolean
+    }>('/api/purchasing/catalog'),
 
   consignments: () => request<{ records: PurchasingRecord[] }>('/api/purchasing/consignments'),
 
@@ -324,4 +398,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ ...sub, user_agent: navigator.userAgent }),
     }),
+
+  // ---------- Notifications: durable inbox shared with the admin dashboard ----------
+  notifications: () => request<{ notifications: AppNotification[]; unread_count: number }>('/api/notifications'),
+  unreadCount: () => request<{ unread_count: number }>('/api/notifications/unread-count'),
+  markNotificationRead: (id: string) => request<{ ok: boolean }>(`/api/notifications/${id}/read`, { method: 'POST' }),
+  markAllNotificationsRead: () => request<{ ok: boolean }>('/api/notifications/read-all', { method: 'POST' }),
 }

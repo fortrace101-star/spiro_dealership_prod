@@ -2,6 +2,7 @@ const express = require('express');
 const { one, many } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
+const { normalizeRole, hasPermission } = require('../permissions/catalog');
 const { audit } = require('../middleware/audit');
 const { recordSale } = require('../services/sales');
 const {
@@ -13,6 +14,7 @@ const {
   releaseReservation,
   findOrCreateCustomer,
 } = require('../services/reservations');
+const pushSvc = require('../services/push');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -37,11 +39,28 @@ router.get('/catalog', async (req, res) => {
 });
 
 /** Record a sale (idempotent via client_txn_id) — used by POS online checkout & sync */
-router.post('/sales', async (req, res) => {
+router.post('/sales', requirePermission('pos_sell'), async (req, res) => {
   try {
     const input = req.body || {};
     if (!input.client_txn_id) return res.status(400).json({ error: 'client_txn_id required' });
     if (!Array.isArray(input.items) || input.items.length === 0) return res.status(400).json({ error: 'items required' });
+
+    // Discounts are issued + approved by the administrator only — the operator
+    // checkout modal has no discount field at all. A hand-crafted or
+    // stale-queue payload carrying one is refused rather than silently
+    // applied, exactly like a credit sale, so money never moves unreviewed.
+    const discount = Number(input.discount || 0);
+    const lineDiscount = (input.items || []).reduce((sum, it) => sum + Number(it.discount || 0), 0);
+    if (discount > 0 || lineDiscount > 0) {
+      return res.status(403).json({
+        error: 'Discounts can only be issued and approved by an administrator — remove the discount and resend',
+      });
+    }
+    // Credit sales are the same completion click for manager + operator: both
+    // hold credit_request and still need admin approval before stock/debt move.
+    if (input.payment_method === 'credit' && !hasPermission(req.user, 'credit_request')) {
+      return res.status(403).json({ error: 'Missing permission: credit_request' });
+    }
 
     const result = await recordSale(input, req.user);
     res.status(result.duplicate ? 200 : 201).json({
@@ -77,10 +96,13 @@ router.get('/me/today', async (req, res) => {
   res.json({ today: stats });
 });
 
-// ---------- Bike reservations & installments (POS, cashier-accessible) ----------
+// ---------- Bike reservations & installments (POS, manager only) ----------
 // Reservations need live row-level locking on the bike (they can never queue
 // offline like sales), so every mutation here requires network access and runs
-// in the same transactional service as the admin back-office.
+// in the same transactional service as the admin back-office. Creating,
+// completing and releasing are manager-only; the admin can elevate a trusted
+// operator with an explicit grant. Releasing additionally opens an admin
+// approval ticket — the POS request never returns the bike alone.
 
 /** List reservations (status defaults to 'active'), searching VIN/model/customer. */
 router.get('/reservations', async (req, res) => {
@@ -108,9 +130,9 @@ router.get('/reservations/:id', async (req, res) => {
 /**
  * Reserve a bike after a down payment. The POS sends either an existing
  * customer_id or a name + phone pair (we create/attach the customer by phone,
- * mirroring the sales flow — cashiers must not juggle customer UUIDs).
+ * mirroring the sales flow — operators must not juggle customer UUIDs).
  */
-router.post('/reservations', async (req, res) => {
+router.post('/reservations', requirePermission('reservation_create'), async (req, res) => {
   try {
     const { bike_id, customer_id, customer_name, customer_phone, total_price, down_payment, plan_months, notes, payment_method, transaction_ref } = req.body || {};
     let cid = customer_id || null;
@@ -131,7 +153,7 @@ router.post('/reservations', async (req, res) => {
 });
 
 /** Record an installment payment (auto-completes + sells the bike at balance 0). */
-router.post('/reservations/:id/payments', async (req, res) => {
+router.post('/reservations/:id/payments', requirePermission('installment_collect'), async (req, res) => {
   try {
     const { amount, payment_method, transaction_ref, note } = req.body || {};
     const result = await recordInstallment(req.params.id, { amount, payment_method, transaction_ref, note }, req.user);
@@ -144,7 +166,7 @@ router.post('/reservations/:id/payments', async (req, res) => {
 });
 
 /** Mark an active zero-balance reservation as fully paid (bike becomes sold). */
-router.post('/reservations/:id/complete', async (req, res) => {
+router.post('/reservations/:id/complete', requirePermission('reservation_complete'), async (req, res) => {
   try {
     const reservation = await completeReservation(req.params.id, req.user);
     res.json({ reservation });
@@ -156,17 +178,16 @@ router.post('/reservations/:id/complete', async (req, res) => {
 });
 
 /**
- * Release an active reservation (bike returns to in_stock).
- * Managers/admins and cashiers granted the inventory_entry permission release
- * immediately; anyone else raises a reservation_release approval that the
- * back-office decides on — the reservation stays active until approved.
+ * Request the release of an active reservation (bike returns to in_stock).
+ * Manager-only (admin can elevate an operator): releasing always needs an
+ * admin decision, so the POS raises a reservation_release approval and the
+ * reservation stays active until the back-office approves it. Admins may
+ * release directly from the dashboard.
  */
-router.post('/reservations/:id/release', async (req, res) => {
+router.post('/reservations/:id/release', requirePermission('reservation_release'), async (req, res) => {
   try {
     const note = (req.body || {}).note || null;
-    const perms = Array.isArray(req.user.permissions) ? req.user.permissions : [];
-    const canRelease =
-      req.user.role === 'admin' || req.user.role === 'manager' || perms.includes('inventory_entry');
+    const canRelease = normalizeRole(req.user.role) === 'admin';
 
     if (!canRelease) {
       const detail = await one(
@@ -191,6 +212,14 @@ router.post('/reservations/:id/release', async (req, res) => {
         })]
       );
       await audit({ userId: req.user.id, action: 'reservation_release_requested', entity: 'bike_reservations', entityId: req.params.id, newValue: approval });
+      // Tell the desk a release is waiting (Phase 1: POS → admin push/inbox).
+      setImmediate(() => pushSvc.notifyAdmins(pushSvc.releaseRequested({
+        reservationId: req.params.id,
+        vin: detail.vin,
+        model: detail.model,
+        customer_name: detail.customer_name,
+        requestedBy: req.user.full_name,
+      })).catch(() => {}));
       return res.status(202).json({ pendingApproval: true, approval, message: 'Release request sent for admin approval' });
     }
 
@@ -276,7 +305,7 @@ router.get('/credit-status', async (req, res) => {
 /** Finalize an approved credit sale — the operator's explicit completion click.
  *  Stock deducts here (guarded against selling out while awaiting approval),
  *  the sale becomes completed and the debt opens. Idempotent via retry. */
-router.post('/credit-sales/:id/finalize', async (req, res) => {
+router.post('/credit-sales/:id/finalize', requirePermission('credit_finalize'), async (req, res) => {
   try {
     const { finalizeSale } = require('../services/credit');
     const result = await finalizeSale(req.params.id, req.user, {
@@ -306,7 +335,7 @@ router.post('/credit-sales/:id/ack', async (req, res) => {
 });
 
 /** Record a settlement payment against an outstanding credit sale (idempotent). */
-router.post('/credit-sales/:id/payments', async (req, res) => {
+router.post('/credit-sales/:id/payments', requirePermission('credit_settle'), async (req, res) => {
   try {
     const { amount, payment_method, note, device_id, client_txn_id } = req.body || {};
     if (!client_txn_id) return res.status(400).json({ error: 'client_txn_id required' });

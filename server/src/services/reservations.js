@@ -1,5 +1,6 @@
 const { pool, one, many } = require('../db');
 const { audit } = require('../middleware/audit');
+const pushSvc = require('./push');
 
 /**
  * Shared reservation + installment logic used by BOTH the admin back-office
@@ -174,6 +175,9 @@ async function createReservation(input, actor) {
   }
   const reservation = await fetchReservation(reservationId);
   if (!reservation) throw Object.assign(new Error('Reservation not found after create'), { status: 404 });
+  // Merged day-one notice: reservation + down payment (first installment) in
+  // one row — no duplicate "created" + "first installment" pair.
+  setImmediate(() => pushSvc.notifyAdmins(pushSvc.reservationCreated(reservation)).catch(() => {}));
   return reservation;
 }
 
@@ -236,7 +240,17 @@ async function recordInstallment(id, input, actor) {
     await client.query('COMMIT');
 
     const reservation = await fetchReservation(id);
-    return { payment, balance: willComplete ? 0 : newBalance, reservation };
+    // Single funnel after COMMIT: admins/managers get the balance/progress
+    // notice; a POS operator (not in that audience) gets their own ✅
+    // self-confirmation on their device — the durable "it actually saved".
+    const finalBalance = willComplete ? 0 : newBalance;
+    setImmediate(() => {
+      pushSvc.notifyAdmins(pushSvc.installmentReceived(reservation, amt, finalBalance, actor.full_name)).catch(() => {});
+      if (String(actor.role) === 'operator') {
+        pushSvc.notifyUser(actor.id, pushSvc.installmentSelf(reservation, amt, finalBalance)).catch(() => {});
+      }
+    });
+    return { payment, balance: finalBalance, reservation };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;

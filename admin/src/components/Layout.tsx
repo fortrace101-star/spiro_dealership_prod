@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { canAccess } from '../lib/access'
 import { playPushChime, usePush } from '../hooks/usePush'
-import { api } from '../lib/api'
+import { api, type AppNotification } from '../lib/api'
 import { ugx } from '../lib/format'
 import { Modal } from './Modal'
 import { cn } from '../lib/cn'
@@ -36,13 +36,24 @@ function NavBadges({ badges }: { badges: Array<{ count: number | null; title: st
           key={b.title}
           title={b.title}
           className={cn(
-            'min-w-[18px] text-center text-[10px] font-bold px-1 py-0.5 rounded-full',
+            // POS badge spec: solid colour pill, white text, ring for separation.
+            'min-w-[16px] h-4 px-1 flex items-center justify-center text-[9px] font-bold text-white rounded-full ring-1 ring-slate-800',
             b.className,
           )}
         >
           {(b.count as number) > 99 ? '99+' : b.count}
         </span>
       ))}
+    </span>
+  )
+}
+
+/** Blinking orange beacon — something is awaiting approval (credit sale / discount). */
+function Beacon() {
+  return (
+    <span className="relative flex h-3.5 w-3.5" aria-hidden>
+      <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 animate-ping" />
+      <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-amber-500 border border-amber-200/60" />
     </span>
   )
 }
@@ -77,6 +88,11 @@ export default function Layout() {
   const [reorderCount, setReorderCount] = useState<number | null>(null)
   const [approvalCount, setApprovalCount] = useState<number | null>(null)
   const [lowStockCount, setLowStockCount] = useState<number | null>(null)
+  // Durable inbox bell (shared `notifications` table, scoped to this user).
+  const [notifUnread, setNotifUnread] = useState(0)
+  const [showNotifs, setShowNotifs] = useState(false)
+  const [notifs, setNotifs] = useState<AppNotification[]>([])
+  const [notifLoading, setNotifLoading] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -89,13 +105,15 @@ export default function Layout() {
         // leave the set entirely.
         const attention = counts.counts.pending + counts.counts.processed
         setReorderCount(attention > 0 ? attention : null)
-        const [approvals, lowStock] = await Promise.all([
+        const [approvals, lowStock, unread] = await Promise.all([
           api.approvals('pending').catch(() => ({ approvals: [] })),
           api.lowStock().catch(() => ({ products: [] })),
+          api.unreadCount().catch(() => ({ unread_count: 0 })),
         ])
         if (cancelled) return
         setApprovalCount(approvals.approvals.length)
         setLowStockCount(lowStock.products.length)
+        setNotifUnread(unread.unread_count)
       } catch {
         /* offline or forbidden — leave badges hidden */
       }
@@ -118,12 +136,47 @@ export default function Layout() {
       const t: Toast = { id: Date.now(), title: payload.title || 'Spiro', body: payload.body || '' }
       setToasts((prev) => [...prev.slice(-2), t])
       if (audioArmed.current) playPushChime()
+      // A push always means a fresh inbox row landed — recount immediately.
+      void api.unreadCount().then((r) => setNotifUnread(r.unread_count)).catch(() => {})
       if (isSale) console.log(`[sale] ${payload.receiptNo || ''} ${ugx(Number(payload.total) || 0)} via ${payload.paymentMethod || '—'}`)
       setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== t.id)), 8000)
     }
     navigator.serviceWorker?.addEventListener('message', onMessage)
     return () => navigator.serviceWorker?.removeEventListener('message', onMessage)
   }, [])
+
+  // ---------- Notification bell (durable inbox shared with the POS) ----------
+  async function openNotifs() {
+    const next = !showNotifs
+    setShowNotifs(next)
+    if (!next) return
+    setNotifLoading(true)
+    try {
+      const r = await api.notifications()
+      setNotifs(r.notifications)
+      setNotifUnread(r.unread_count)
+    } catch {
+      /* offline — keep whatever we had */
+    }
+    setNotifLoading(false)
+  }
+
+  async function clickNotif(n: AppNotification) {
+    if (!n.read_at) {
+      setNotifs((prev) => prev.map((x) => (x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x)))
+      setNotifUnread((c) => Math.max(0, c - 1))
+      try { await api.markNotificationRead(n.id) } catch { /* next poll reconciles */ }
+    }
+    setShowNotifs(false)
+    if (n.url) navigate(n.url)
+  }
+
+  async function readAllNotifs() {
+    const now = new Date().toISOString()
+    setNotifs((prev) => prev.map((x) => (x.read_at ? x : { ...x, read_at: now })))
+    setNotifUnread(0)
+    try { await api.markAllNotificationsRead() } catch { /* non-fatal */ }
+  }
 
   async function doWipe() {
     setWiping(true)
@@ -153,7 +206,7 @@ export default function Layout() {
           navOpen ? 'translate-x-0' : '-translate-x-full',
         )}
       >
-        <div className="h-16 flex items-center gap-3 px-5 border-b border-slate-800/70">
+        <div className="relative h-16 flex items-center gap-3 px-5 border-b border-slate-800/70">
           <button type="button" onClick={() => setShowAccount(true)} title="Account" className="rounded-lg hover:opacity-80">
             <img src="/logo.png" alt="Spiro" className="h-8 w-8 object-contain" />
           </button>
@@ -161,6 +214,16 @@ export default function Layout() {
             <div className="font-bold text-white leading-tight">Spiro</div>
             <div className="text-[10px] text-slate-500 uppercase tracking-widest">Admin Console</div>
           </div>
+          {/* PC: beacon inside the brand block's top-right corner — equal
+              padding from the top and right borders (12px each). */}
+          {approvalCount !== null && approvalCount > 0 && (
+            <span
+              className="hidden lg:block absolute top-3 right-3"
+              title="Awaiting approval — credit sale or discount needs a decision"
+            >
+              <Beacon />
+            </span>
+          )}
         </div>
 
         <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
@@ -182,7 +245,7 @@ export default function Layout() {
               </svg>
               {item.label}
               {item.to === '/approvals' && approvalCount !== null && approvalCount > 0 && (
-                <span className="absolute top-1 right-1.5 min-w-[18px] text-center text-[10px] font-bold px-1 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                <span className="absolute top-1 right-1.5 min-w-[16px] h-4 px-1 flex items-center justify-center text-[9px] font-bold text-white rounded-full bg-amber-500 ring-1 ring-slate-800">
                   {approvalCount > 99 ? '99+' : approvalCount}
                 </span>
               )}
@@ -190,15 +253,15 @@ export default function Layout() {
               {item.to === '/purchasing' && (
                 <NavBadges
                   badges={[
-                    { count: reorderCount, title: 'Active reorder lists needing fulfillment', className: 'bg-sky-500/20 text-sky-300 border border-sky-500/30' },
-                    { count: lowStockCount, title: 'Products under-stocked or out of stock', className: 'bg-red-500/20 text-red-300 border border-red-500/30' },
+                    { count: reorderCount, title: 'Active reorder lists needing fulfillment', className: 'bg-sky-500' },
+                    { count: lowStockCount, title: 'Products under-stocked or out of stock', className: 'bg-red-500' },
                   ]}
                 />
               )}
               {item.to === '/inventory' && (
                 <NavBadges
                   badges={[
-                    { count: lowStockCount, title: 'Products under-stocked or out of stock', className: 'bg-red-500/20 text-red-300 border border-red-500/30' },
+                    { count: lowStockCount, title: 'Products under-stocked or out of stock', className: 'bg-red-500' },
                   ]}
                 />
               )}
@@ -238,18 +301,83 @@ export default function Layout() {
         <header className="h-16 shrink-0 border-b border-slate-800/70 flex items-center justify-between px-4 sm:px-6 bg-[#0e1218]/60 backdrop-blur gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <button
-              className="btn-ghost lg:hidden !px-2.5 !py-2"
+              className="btn-ghost lg:hidden !px-2.5 !py-2 relative"
               aria-label="Open navigation"
               onClick={() => setNavOpen(true)}
             >
               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
               </svg>
+              {/* Mobile: beacon pinned to the hamburger's badge corner. */}
+              {approvalCount !== null && approvalCount > 0 && (
+                <span className="absolute -top-1 -right-1" title="Awaiting approval">
+                  <Beacon />
+                </span>
+              )}
             </button>
             <div className="text-sm text-slate-400 truncate hidden sm:block">Phase 1 · Uganda Operations</div>
             <div className="font-semibold text-white sm:hidden">Spiro Admin</div>
           </div>
           <div className="flex items-center gap-3 sm:gap-4">
+            {/* Durable inbox bell — same rows the POS shows for its own user */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => void openNotifs()}
+                title={notifUnread > 0 ? `${notifUnread} unread notification${notifUnread === 1 ? '' : 's'}` : 'Notifications'}
+                aria-label="Notifications"
+                className="btn-ghost text-xs relative"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+                {notifUnread > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 flex items-center justify-center text-[9px] font-bold text-white rounded-full bg-brand-500 ring-1 ring-slate-800">
+                    {notifUnread > 99 ? '99+' : notifUnread}
+                  </span>
+                )}
+              </button>
+              {showNotifs && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowNotifs(false)} />
+                  <div className="absolute right-0 top-full mt-2 w-[300px] max-h-[70vh] overflow-y-auto card p-2 z-50 shadow-2xl">
+                    <div className="flex items-center justify-between px-2 py-1.5">
+                      <span className="text-xs font-semibold text-white uppercase tracking-wider">Notifications</span>
+                      <button type="button" className="text-[11px] text-brand-300 hover:text-brand-200" onClick={() => void readAllNotifs()}>
+                        Mark all read
+                      </button>
+                    </div>
+                    {notifLoading ? (
+                      <p className="text-xs text-slate-500 px-2 py-3">Loading…</p>
+                    ) : notifs.length === 0 ? (
+                      <p className="text-xs text-slate-500 px-2 py-3">Nothing yet — sales, approvals, reservations and team changes land here.</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {notifs.map((n) => (
+                          <button
+                            key={n.id}
+                            type="button"
+                            onClick={() => void clickNotif(n)}
+                            className={cn('w-full text-left rounded-lg px-2.5 py-2 transition', n.read_at ? 'opacity-60' : 'bg-brand-500/10 hover:bg-brand-500/20')}
+                          >
+                            <div className="flex items-start gap-2">
+                              {!n.read_at && <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-400" />}
+                              <div className="min-w-0">
+                                <div className="text-xs font-semibold text-white truncate">{n.title}</div>
+                                <div className="text-[11px] text-slate-400 leading-snug">{n.body}</div>
+                                <div className="text-[10px] text-slate-600 mt-0.5">
+                                  {new Date(n.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                </div>
+                              </div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
             <div className="text-right">
               <div className="text-sm font-semibold text-white">{user?.full_name}</div>
               <div className="text-[11px] text-slate-500 capitalize">{user?.role}</div>

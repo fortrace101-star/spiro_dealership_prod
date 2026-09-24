@@ -1,0 +1,14 @@
+{
+  "name": "Spiro Admin",
+  "short_name": "Spiro",
+  "description": "Spiro dealership admin console",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0c0f14",
+  "theme_color": "#0c0f14",
+  "icons": [
+    { "src": "/logo.png", "sizes": "any", "type": "image/png", "purpose": "any" },
+    { "src": "/favicon.png", "sizes": "any", "type": "image/png" }
+  ]
+}

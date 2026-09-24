@@ -7,10 +7,18 @@ interface AuthCtx {
   user: User | null
   loading: boolean
   login: (email: string, password: string) => Promise<void>
+  /** Consume the one-time setup code and sign in as the first admin. */
+  completeSetup: (input: { code: string; full_name: string; email: string; password: string }) => Promise<void>
   logout: () => void
 }
 
-const Ctx = createContext<AuthCtx>({ user: null, loading: true, login: async () => {}, logout: () => {} })
+const Ctx = createContext<AuthCtx>({
+  user: null,
+  loading: true,
+  login: async () => {},
+  completeSetup: async () => {},
+  logout: () => {},
+})
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -39,7 +47,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
   }, [])
 
-  return <Ctx.Provider value={{ user, loading, login, logout }}>{children}</Ctx.Provider>
+  const completeSetup = useCallback(
+    async (input: { code: string; full_name: string; email: string; password: string }) => {
+      const r = await api.setupComplete(input)
+      setSession(r.token, r.user)
+      setUser(r.user)
+    },
+    [],
+  )
+
+  return (
+    <Ctx.Provider value={{ user, loading, login, completeSetup, logout }}>{children}</Ctx.Provider>
+  )
 }
 
 export function useAuth() {

@@ -153,6 +153,9 @@ async function finalizeSale(saleId, actor, opts = {}) {
     if (!upd) return { duplicate: true, sale };
 
     await audit({ userId: actor.id, action: 'credit_finalized', entity: 'sales', entityId: sale.id, newValue: { status: 'completed', total: sale.total } });
+    // Phase 1: the desk learns stock actually moved (Phase wiring at the
+    // service level covers POS finalize and any future admin-side path).
+    setImmediate(() => pushSvc.notifyAdmins(pushSvc.creditFinalized(upd, actor.full_name)).catch(() => {}));
     return { duplicate: false, sale: upd };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -221,6 +224,9 @@ async function recordPayment(input, actor) {
       newValue: { amount: amt, paid, balance, status } });
     // Settlement revenue may set a new all-time-high day/week/month.
     checkRevenueRecords(pushSvc).catch(() => {});
+    // Wire the previously dead creditPayment payload: the desk hears about
+    // every settlement (POS and back-office paths both land here).
+    setImmediate(() => pushSvc.notifyAdmins(pushSvc.creditPayment(sale, amt, balance)).catch(() => {}));
     return { duplicate: false, payment: pay, paid, balance, status };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -304,7 +310,7 @@ async function listCreditLedger(view, filters = {}) {
  * COALESCE never overwrites an existing confirmation, so retries are free.
  */
 async function acknowledgeRejection(saleId, actor) {
-  const sale = await one(`SELECT id, status FROM sales WHERE id = $1`, [saleId]);
+  const sale = await one(`SELECT id, status, receipt_no, total FROM sales WHERE id = $1`, [saleId]);
   if (!sale) throw httpError(404, 'Sale not found');
   if (sale.status !== 'rejected') throw httpError(409, 'Only rejected credit sales need confirmation');
   const rec = await one(
@@ -315,6 +321,8 @@ async function acknowledgeRejection(saleId, actor) {
   );
   if (!rec) throw httpError(404, 'No rejection recorded for this sale');
   await audit({ userId: actor.id, action: 'credit_rejection_confirmed', entity: 'sales', entityId: saleId, newValue: { status: 'rejected' } });
+  // Phase 1: the desk sees the queue actually cleared.
+  setImmediate(() => pushSvc.notifyAdmins(pushSvc.creditRejectionAck(sale)).catch(() => {}));
   return { ok: true, sale_id: saleId, acknowledged_at: rec.acknowledged_at };
 }
 

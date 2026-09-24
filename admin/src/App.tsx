@@ -1,7 +1,10 @@
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { canAccess } from './lib/access'
+import { api } from './lib/api'
 import LoginScreen from './components/LoginScreen'
+import SetupScreen from './pages/SetupScreen'
 import Layout from './components/Layout'
 import OverviewPage from './pages/OverviewPage'
 import SalesPage from './pages/SalesPage'
@@ -30,10 +33,49 @@ function Protected({ children }: { children: React.ReactElement }) {
   return children
 }
 
+/**
+ * On a fresh (or just-wiped) install there are no users, so signing in is
+ * impossible — send the browser to /setup instead of a login form that could
+ * only ever fail. Once an admin exists, /setup itself goes back to /login.
+ * A failed status check (server down) must not trap the user, so it is
+ * treated as "not required".
+ */
+function SetupGate() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [checked, setChecked] = useState(false)
+  const [required, setRequired] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    api
+      .setupStatus()
+      .then((s) => {
+        if (!alive) return
+        setRequired(s.setup_required)
+        setChecked(true)
+      })
+      .catch(() => alive && setChecked(true))
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!checked) return
+    if (required && location.pathname !== '/setup') navigate('/setup', { replace: true })
+    if (!required && location.pathname === '/setup') navigate('/login', { replace: true })
+  }, [checked, required, location.pathname, navigate])
+
+  return null
+}
+
 export default function App() {
   return (
     <AuthProvider>
+      <SetupGate />
       <Routes>
+        <Route path="/setup" element={<SetupScreen />} />
         <Route path="/login" element={<LoginScreen />} />
         <Route
           path="/"

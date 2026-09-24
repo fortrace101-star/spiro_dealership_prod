@@ -3,14 +3,31 @@ const crypto = require('crypto');
 const { one, many, query, pool } = require('../db');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
+const {
+  POS_ROLES,
+  GRANTABLE_PERMISSION_IDS,
+  normalizeRole,
+  expandPermissions,
+  effectivePermissions,
+  catalog,
+} = require('../permissions/catalog');
 const { audit } = require('../middleware/audit');
 const { verifyPassword } = require('../auth');
+const { findOrCreateCustomer } = require('../services/reservations');
+const pushSvc = require('../services/push');
 
 const router = express.Router();
 router.use(requireAuth);
 
-/** Whitelist of POS capabilities that can be granted beyond a user's role. */
-const POS_PERMISSIONS = ['inventory_entry'];
+/**
+ * POS capabilities that can be granted beyond a role baseline. The catalog
+ * (server/src/permissions/catalog.js) is the single source of truth and is also
+ * what the Team page renders, so enforcement and UI can never drift.
+ */
+const POS_PERMISSIONS = GRANTABLE_PERMISSION_IDS;
+
+/** Role + permission catalog for the admin Team page. */
+router.get('/permissions', requireRole(), (req, res) => res.json(catalog()));
 
 // ---------- Activation codes (admin) ----------
 router.get('/codes', requireRole(), async (req, res) => {
@@ -25,15 +42,19 @@ router.get('/codes', requireRole(), async (req, res) => {
 });
 
 router.post('/codes', requireRole(), async (req, res) => {
-  const { label, role = 'cashier', days = 7, permissions } = req.body || {};
+  const { label, role = 'operator', days = 7, permissions } = req.body || {};
   const code = 'SPIRO-' + crypto.randomBytes(3).toString('hex').toUpperCase();
-  // Whitelist of grantable POS permissions (extra capabilities beyond the role).
-  const allowed = POS_PERMISSIONS;
-  const perms = Array.isArray(permissions) ? permissions.filter((p) => allowed.includes(p)) : [];
+  // Grants are normalized against the catalog: legacy ids are expanded,
+  // unknown ids dropped and admin-only capabilities can never be handed out.
+  // Codes only ever carry the two POS roles: manager or operator.
+  const perms = expandPermissions(permissions);
+  // Only the two POS roles can be issued; anything else falls back to operator.
+  const normalizedRole = normalizeRole(role);
+  const targetRole = POS_ROLES.includes(normalizedRole) ? normalizedRole : 'operator';
   const rec = await one(
     `INSERT INTO activation_codes (code, label, role, permissions, created_by, expires_at)
      VALUES ($1,$2,$3,$4,$5, now() + ($6 || ' days')::interval) RETURNING *`,
-    [code, label || null, ['manager', 'cashier', 'mechanic'].includes(role) ? role : 'cashier', JSON.stringify(perms), req.user.id, String(days)]
+    [code, label || null, targetRole, JSON.stringify(perms), req.user.id, String(days)]
   );
   await audit({ userId: req.user.id, action: 'create_code', entity: 'activation_code', entityId: rec.id, newValue: rec });
   res.status(201).json({ code: rec });
@@ -52,6 +73,17 @@ router.patch('/users/:id', requireRole(), async (req, res) => {
   const before = await one(`SELECT * FROM users WHERE id = $1`, [req.params.id]);
   if (!before) return res.status(404).json({ error: 'User not found' });
 
+  // The role can only be swapped between the two POS roles (admins manage
+  // themselves in the database); legacy names normalize to their replacement.
+  let nextRole = null;
+  if (role !== undefined) {
+    const normalized = normalizeRole(role);
+    if (!POS_ROLES.includes(normalized)) {
+      return res.status(400).json({ error: `role must be one of: ${POS_ROLES.join(', ')}` });
+    }
+    nextRole = normalized;
+  }
+
   // An existing operator can be granted or stripped of POS capabilities without a
   // new activation code. Only whitelisted values are stored, deduped and bounded.
   let perms = null;
@@ -59,7 +91,7 @@ router.patch('/users/:id', requireRole(), async (req, res) => {
     if (!Array.isArray(permissions) || permissions.length > POS_PERMISSIONS.length + 5) {
       return res.status(400).json({ error: 'permissions must be a list of known capabilities' });
     }
-    perms = [...new Set(permissions.filter((p) => POS_PERMISSIONS.includes(p)))];
+    perms = expandPermissions(permissions);
   }
 
   const user = await one(
@@ -68,15 +100,30 @@ router.patch('/users/:id', requireRole(), async (req, res) => {
        role = COALESCE($3, role),
        permissions = COALESCE($4, permissions)
      WHERE id = $1 RETURNING id, full_name, email, phone, role, permissions, is_active`,
-    [req.params.id, is_active ?? null, role ?? null, perms ? JSON.stringify(perms) : null]
+    [req.params.id, is_active ?? null, nextRole, perms ? JSON.stringify(perms) : null]
   );
   await audit({ userId: req.user.id, action: 'update_user', entity: 'user', entityId: user.id, oldValue: before, newValue: user });
-  res.json({ user });
+  // Tell the target: the grant lands in their inbox row now (survives until
+  // their next login) and pushes live to their device if subscribed. POS
+  // users get url '/' (admin routes mean nothing on the POS origin).
+  if (perms && user.is_active && user.id !== req.user.id) {
+    const beforePerms = Array.isArray(before.permissions) ? before.permissions : [];
+    const added = perms.filter((p) => !beforePerms.includes(p));
+    const removed = beforePerms.filter((p) => !perms.includes(p));
+    const changes = [...added.map((p) => `${p} granted`), ...removed.map((p) => `${p} removed`)];
+    const summary = changes.length ? changes.join(' · ') : 'Your POS capabilities were updated';
+    const targetUrl = normalizeRole(user.role) === 'admin' ? '/team' : '/';
+    setImmediate(() => pushSvc.notifyUser(user.id, pushSvc.permissionGranted(summary, targetUrl)).catch(() => {}));
+  }
+  // `permissions` = stored grants, `effective_permissions` = role baseline ∪ grants.
+  res.json({ user: { ...user, effective_permissions: effectivePermissions(user) } });
 });
 
 // ---------- Products (admin) ----------
-// Write routes require the inventory_entry permission (admins/managers pass
-// implicitly; other roles must have been granted it via their activation code).
+// Dashboard catalogue writes are manager work: requireRole('manager') (admins
+// pass automatically) plus the matching catalog permission. Requiring the role
+// alone is not enough — the permission names the operation so the two sides
+// (guard and Team-page checkbox) stay readable.
 router.get('/products', async (req, res) => {
   const { q, low_stock } = req.query;
   const params = [];
@@ -92,7 +139,7 @@ router.get('/products', async (req, res) => {
   res.json({ products });
 });
 
-router.post('/products', requireRole(), requirePermission('inventory_entry'), async (req, res) => {
+router.post('/products', requireRole('manager'), requirePermission('inventory_receive'), async (req, res) => {
   try {
     const p = req.body || {};
     if (!p.sku || !p.name) return res.status(400).json({ error: 'sku and name required' });
@@ -115,7 +162,7 @@ router.post('/products', requireRole(), requirePermission('inventory_entry'), as
   }
 });
 
-router.put('/products/:id', requireRole(), requirePermission('inventory_entry'), async (req, res) => {
+router.put('/products/:id', requireRole('manager'), async (req, res) => {
   const before = await one(`SELECT * FROM products WHERE id = $1`, [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Product not found' });
   const p = { ...before, ...req.body };
@@ -152,7 +199,7 @@ router.get('/bikes', async (req, res) => {
   res.json({ bikes });
 });
 
-router.post('/bikes', requireRole(), async (req, res) => {
+router.post('/bikes', requireRole('manager'), requirePermission('inventory_receive'), async (req, res) => {
   try {
     const b = req.body || {};
     if (!b.vin || !b.model) return res.status(400).json({ error: 'vin and model required' });
@@ -171,7 +218,7 @@ router.post('/bikes', requireRole(), async (req, res) => {
   }
 });
 
-router.put('/bikes/:id', requireRole(), async (req, res) => {
+router.put('/bikes/:id', requireRole('manager'), requirePermission('inventory_receive'), async (req, res) => {
   const before = await one(`SELECT * FROM bikes WHERE id = $1`, [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Bike not found' });
   const b = { ...before, ...req.body };
@@ -304,8 +351,20 @@ router.get('/reservations/:id', requireRole(), async (req, res) => {
 
 // Create a reservation: lock the bike, take the down payment, flip bike → 'reserved'.
 router.post('/reservations', requireRole(), async (req, res) => {
-  const { bike_id, customer_id, total_price, down_payment, plan_months, notes, payment_method, transaction_ref } = req.body || {};
-  if (!bike_id || !customer_id) return res.status(400).json({ error: 'bike_id and customer_id required' });
+  const { bike_id, customer_id, customer_name, customer_phone, total_price, down_payment, plan_months, notes, payment_method, transaction_ref } = req.body || {};
+  // Either an existing customer_id, or a name + phone pair for a walk-in (same
+  // as the POS route: matched by phone or created on the spot), so a cash
+  // customer can reserve a bike without being registered on the Customers page first.
+  let cid = customer_id || null;
+  if (!cid) {
+    if (!customer_name || !customer_phone) return res.status(400).json({ error: 'customer_id or customer_name + customer_phone required' });
+    try {
+      cid = await findOrCreateCustomer({ full_name: customer_name, phone: customer_phone });
+    } catch (err) {
+      return res.status(err.status || 500).json({ error: err.message });
+    }
+  }
+  if (!bike_id || !cid) return res.status(400).json({ error: 'bike_id and customer required' });
   const tp = Number(total_price);
   const dp = Number(down_payment);
   const months = Number(plan_months) || 0;
@@ -322,14 +381,14 @@ router.post('/reservations', requireRole(), async (req, res) => {
     if (bike.rows[0].status !== 'in_stock') {
       throw Object.assign(new Error(`Bike is ${bike.rows[0].status}; only in-stock bikes can be reserved`), { status: 400 });
     }
-    const customer = await client.query(`SELECT id FROM customers WHERE id = $1`, [customer_id]);
+    const customer = await client.query(`SELECT id FROM customers WHERE id = $1`, [cid]);
     if (!customer.rows[0]) throw Object.assign(new Error('Customer not found'), { status: 404 });
 
     const balance = tp - dp;
     const rec = await client.query(
       `INSERT INTO bike_reservations (bike_id, customer_id, reserved_by, total_price, down_payment, balance, plan_months, status, notes)
         VALUES ($1,$2,$3,$4,$5,$6,$7,'active', $8) RETURNING *`,
-      [bike_id, customer_id, req.user.id, tp, dp, balance, months, notes || null],
+      [bike_id, cid, req.user.id, tp, dp, balance, months, notes || null],
     );
     const reservation = rec.rows[0];
 
@@ -352,7 +411,7 @@ router.post('/reservations', requireRole(), async (req, res) => {
       await client.query(
         `UPDATE bikes SET status = 'sold', sold_at = now(), sold_price = $1, customer_id = $2, updated_at = now()
           WHERE id = $3`,
-        [tp, customer_id, bike_id],
+        [tp, cid, bike_id],
       );
     } else {
       // Bike is only partially paid: flip it to 'reserved' so it can't be double-booked.
@@ -378,6 +437,8 @@ router.post('/reservations', requireRole(), async (req, res) => {
   }
     const reservation = await fetchReservation(reservationId);
   if (!reservation) return res.status(404).json({ error: 'Reservation not found after create' });
+  // Merged day-one notice (same funnel as the POS/Service path).
+  setImmediate(() => pushSvc.notifyAdmins(pushSvc.reservationCreated(reservation)).catch(() => {}));
   res.status(201).json({ reservation });
 });
 
@@ -430,7 +491,19 @@ router.post('/reservations/:id/payments', requireRole(), async (req, res) => {
     await client.query('COMMIT');
 
         const reservation = await fetchReservation(req.params.id);
-    res.json({ payment, balance: willComplete ? 0 : newBalance, reservation });
+    // Same installment notices as the POS path (admins/managers = progress,
+    // operator actor = own ✅ confirmation — the latter is rare here because
+    // the route is manager+ only, but kept for symmetry).
+    const finalBalance = willComplete ? 0 : newBalance;
+    if (reservation) {
+      setImmediate(() => {
+        pushSvc.notifyAdmins(pushSvc.installmentReceived(reservation, amt, finalBalance, req.user.full_name)).catch(() => {});
+        if (String(req.user.role) === 'operator') {
+          pushSvc.notifyUser(req.user.id, pushSvc.installmentSelf(reservation, amt, finalBalance)).catch(() => {});
+        }
+      });
+    }
+    res.json({ payment, balance: finalBalance, reservation });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     if (err.status) return res.status(err.status).json({ error: err.message });
@@ -576,7 +649,7 @@ router.get('/customers/:id', async (req, res) => {
 });
 
 // ---------- Inventory adjustments (admin/manager) ----------
-router.post('/inventory/adjust', requireRole(), requirePermission('inventory_entry'), async (req, res) => {
+router.post('/inventory/adjust', requireRole('manager'), requirePermission('inventory_receive'), async (req, res) => {
   const { product_id, qty, note, type = 'adjustment' } = req.body || {};
   const product = await one(`SELECT * FROM products WHERE id = $1`, [product_id]);
   if (!product) return res.status(404).json({ error: 'Product not found' });
@@ -640,7 +713,7 @@ router.post('/approvals/:id/decide', requireRole(), async (req, res) => {
   const { decision, note } = req.body || {};
   if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ error: 'decision must be approved|rejected' });
 
-  const prior = await one('SELECT type, payload FROM approvals WHERE id = $1', [req.params.id]);
+  const prior = await one('SELECT type, payload, requested_by FROM approvals WHERE id = $1', [req.params.id]);
 
   // Credit-sale decisions run through the credit service: the approval row and
   // the sale's 'pending_credit' → 'rejected' flip happen in one transaction, and
@@ -675,6 +748,12 @@ router.post('/approvals/:id/decide', requireRole(), async (req, res) => {
   );
   if (!rec) return res.status(400).json({ error: 'Approval not found or already decided' });
   await audit({ userId: req.user.id, action: `approval_${decision}`, entity: 'approval', entityId: rec.id, newValue: rec });
+  // POS-raised release decisions travel back to the requester (durable inbox
+  // + live push) — this was the one admin→POS flow with no notification.
+  if (prior && prior.type === 'reservation_release' && prior.requested_by && prior.requested_by !== req.user.id) {
+    const p = prior.payload || {};
+    setImmediate(() => pushSvc.notifyUser(prior.requested_by, pushSvc.releaseDecision(decision, { ...p, note: note || null })).catch(() => {}));
+  }
   res.json({ approval: rec });
 });
 
@@ -692,6 +771,35 @@ router.get('/credit/sales', requireRole(), async (req, res) => {
   } catch (err) {
     console.error('[admin/credit]', err);
     res.status(500).json({ error: 'Failed to load credit ledger' });
+  }
+});
+
+// One-click Approve & Finalize from the credit desk — the back-office twin of
+// the POS two-step (Approvals.decide → operator's Finalize). Decides a still-
+// pending credit_sale approval first, then runs the SAME finalize service the
+// POS uses: stock guards, audit trail, cashier/admin pushes and idempotency
+// (a concurrent POS finalize just reports duplicate) all stay identical.
+// requireRole() with no roles = admin-only, matching /approvals/:id/decide.
+router.post('/credit-sales/:id/approve-finalize', requireRole(), async (req, res) => {
+  try {
+    const { decideCreditApproval, finalizeSale } = require('../services/credit');
+    const saleId = req.params.id;
+    const pending = await one(
+      `SELECT id FROM approvals
+        WHERE type = 'credit_sale' AND status = 'pending' AND payload ->> 'sale_id' = $1
+        ORDER BY created_at DESC LIMIT 1`,
+      [saleId]
+    );
+    let approved = false;
+    if (pending) {
+      await decideCreditApproval(pending.id, 'approved', null, req.user);
+      approved = true;
+    }
+    const fin = await finalizeSale(saleId, req.user, {});
+    res.json({ ok: true, approved, duplicate: !!fin.duplicate, sale: fin.sale });
+  } catch (err) {
+    console.error('[admin/credit approve-finalize]', err);
+    res.status(err.status || 500).json({ error: err.message || 'Approve & finalize failed' });
   }
 });
 
@@ -732,7 +840,7 @@ router.post('/dev/wipe', requireRole(), async (req, res) => {
   try {
     // Quote identifiers — TRUNCATE takes a list, not parameters.
     await query(
-      `TRUNCATE audit_log, push_subscriptions, stock_movements, sale_items,
+      `TRUNCATE audit_log, push_subscriptions, notifications, stock_movements, sale_items,
               credit_payments, sales, approvals, customer_bikes, activation_codes
        RESTART IDENTITY CASCADE`
     );
