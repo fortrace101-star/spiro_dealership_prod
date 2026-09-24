@@ -3,7 +3,35 @@ const path = require('path');
 const fs = require('fs');
 require('../config'); // ensure dotenv is loaded before Pool reads DATABASE_URL
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+/**
+ * Managed Postgres (Render, Neon, Supabase, ...) refuses non-TLS connections
+ * and answers with a bare `read ECONNRESET`, which is easy to misread as a
+ * network/firewall problem. Local Postgres usually has no TLS at all.
+ *
+ * So: if DATABASE_URL targets something other than localhost and carries no
+ * explicit sslmode, force SSL on. An explicit `sslmode=` in the URL (or
+ * DATABASE_SSL env) always wins, so you can still override either way.
+ */
+function buildPoolConfig() {
+  const connectionString = process.env.DATABASE_URL || '';
+  const envSSL = String(process.env.DATABASE_SSL || '').toLowerCase();
+
+  if (envSSL === 'disable' || envSSL === 'false') return { connectionString };
+  if (envSSL === 'require' || envSSL === 'true') {
+    return { connectionString, ssl: { rejectUnauthorized: false } };
+  }
+
+  if (/sslmode=/i.test(connectionString)) return { connectionString };
+
+  let host = '';
+  try { host = new URL(connectionString).hostname; } catch { /* parsed by pg later */ }
+  const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '';
+  if (isLocal) return { connectionString };
+
+  return { connectionString, ssl: { rejectUnauthorized: false } };
+}
+
+const pool = new Pool(buildPoolConfig());
 
 pool.on('error', (err) => console.error('[db] idle client error', err.message));
 

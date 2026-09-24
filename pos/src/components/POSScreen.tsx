@@ -562,9 +562,9 @@ export default function POSScreen() {
           {/* Major catalogue tabs sit above the search bar. */}
           <div className="flex items-center justify-between gap-4">
             <div className="flex gap-2 w-fit">
-              <button className={cn('btn text-xs', major === 'ice' ? 'btn-primary' : 'btn-ghost')} onClick={() => { setMajor('ice'); setCategory('All') }}>I.C.E Bike Spare Parts &amp; Accessories</button>
+              <button className={cn('btn text-xs', major === 'ice' ? 'btn-primary' : 'btn-ghost')} onClick={() => { setMajor('ice'); setCategory('All') }}>Bajaj Spare Parts &amp; Accessories</button>
               <button className={cn('btn text-xs', major === 'ebikes' ? 'btn-primary' : 'btn-ghost')} onClick={() => { setMajor('ebikes'); setCategory('All') }}>e-Bikes</button>
-              <button className={cn('btn text-xs', major === 'ebikeparts' ? 'btn-primary' : 'btn-ghost')} onClick={() => { setMajor('ebikeparts'); setCategory('All') }}>e-Bike Spare Parts</button>
+              <button className={cn('btn text-xs', major === 'ebikeparts' ? 'btn-primary' : 'btn-ghost')} onClick={() => { setMajor('ebikeparts'); setCategory('All') }}>Spiro Spare Parts</button>
             </div>
             <div className="flex items-center gap-2">
               {canReceive && (
