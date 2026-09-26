@@ -267,9 +267,11 @@ export const api = {
   purchasingCatalog: () =>
     request<{
       products: PurchasingProduct[]
-      can_receive: boolean
+            can_receive: boolean
       /** Legacy flag — mirrors `can_receive` (inline product creation is part of receiving). */
       can_create_products: boolean
+      can_edit_products: boolean
+      can_adjust_inventory: boolean
       can_reorder: boolean
       can_manage_reorders: boolean
     }>('/api/purchasing/catalog'),
@@ -355,6 +357,33 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ note: note || null }),
     }),
+
+  // ---------- Product editing & inventory adjustment (grantable POS permissions) ----------
+  // These endpoints are served from the POS API so the server can re-check the
+  // product_edit / inventory_adjust grants on every request.
+  updateProduct: (id: string, patch: Partial<{
+    sku: string
+    barcode: string | null
+    name: string
+    category: string
+    brand: string | null
+    supplier: string | null
+    cost_price: number
+    selling_price: number
+    min_stock: number
+    reorder_level: number
+    active: boolean
+  }>) =>
+    request<{ product: Product }>(`/api/pos/products/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+
+  adjustInventory: (productId: string, qty: number, note?: string, type: string = 'adjustment') =>
+    request<{ movement: { id: string; product_id: string; qty: number; type: string; note: string | null }; stock_qty: number }>(
+      '/api/pos/inventory/adjust',
+      { method: 'POST', body: JSON.stringify({ product_id: productId, qty, note, type }) },
+    ),
 
   // ---------- Credit sales: approval queue, finalize, settlement payments ----------
   // Online-only: finalize moves real stock and payments record real money;

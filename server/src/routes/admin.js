@@ -139,7 +139,7 @@ router.get('/products', async (req, res) => {
   res.json({ products });
 });
 
-router.post('/products', requireRole('manager'), requirePermission('inventory_receive'), async (req, res) => {
+router.post('/products', requireRole('manager'), requirePermission(['inventory_receive', 'product_edit']), async (req, res) => {
   try {
     const p = req.body || {};
     if (!p.sku || !p.name) return res.status(400).json({ error: 'sku and name required' });
@@ -162,7 +162,7 @@ router.post('/products', requireRole('manager'), requirePermission('inventory_re
   }
 });
 
-router.put('/products/:id', requireRole('manager'), async (req, res) => {
+router.put('/products/:id', requireRole('manager'), requirePermission('product_edit'), async (req, res) => {
   const before = await one(`SELECT * FROM products WHERE id = $1`, [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Product not found' });
   const p = { ...before, ...req.body };
@@ -649,7 +649,7 @@ router.get('/customers/:id', async (req, res) => {
 });
 
 // ---------- Inventory adjustments (admin/manager) ----------
-router.post('/inventory/adjust', requireRole('manager'), requirePermission('inventory_receive'), async (req, res) => {
+router.post('/inventory/adjust', requireRole('manager'), requirePermission(['inventory_receive', 'inventory_adjust']), async (req, res) => {
   const { product_id, qty, note, type = 'adjustment' } = req.body || {};
   const product = await one(`SELECT * FROM products WHERE id = $1`, [product_id]);
   if (!product) return res.status(404).json({ error: 'Product not found' });

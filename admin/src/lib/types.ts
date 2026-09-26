@@ -83,9 +83,11 @@ export type PosPermission =
   | 'credit_finalize'
   | 'credit_settle'
   | 'installment_collect'
-  | 'reservation_create'
+      | 'reservation_create'
   | 'reservation_complete'
   | 'reservation_release'
+  | 'product_edit'
+  | 'inventory_adjust'
 
 export interface User {
   id: string

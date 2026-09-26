@@ -59,6 +59,16 @@ export function usePush() {
 
   const detect = useCallback(async (): Promise<PushState> => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      // Distinguish "browser doesn't support Push API" from "not on a secure origin"
+      const isSecure = location.protocol === 'https:' ||
+        location.hostname === 'localhost' ||
+        location.hostname === '127.0.0.1' ||
+        location.hostname === '::1'
+      if (!isSecure) {
+        setError('Push notifications require HTTPS. This POS is served over HTTP — use https:// or access via localhost.')
+      } else {
+        setError('This browser does not support push notifications. Try Chrome, Edge, or Firefox.')
+      }
       setState('unsupported')
       return 'unsupported'
     }
@@ -93,7 +103,11 @@ export function usePush() {
         }
       }
       const { publicKey } = await api.vapidPublicKey()
-      const reg = await navigator.serviceWorker.register(import.meta.env.DEV ? '/sw-dev.js' : '/sw.js')
+      const swUrl = import.meta.env.DEV ? '/sw-dev.js' : '/sw.js'
+      const reg = await navigator.serviceWorker.register(swUrl).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        throw new Error(`Service worker registration failed (${swUrl}): ${msg}`)
+      })
       await navigator.serviceWorker.ready
 
       const existing = await reg.pushManager.getSubscription()
@@ -140,7 +154,7 @@ export function usePush() {
     return () => {
       cancelled = true
     }
-  }, [detect, enable])
+     }, [detect, enable])
 
   return { state, busy, error, enable, refresh: detect }
 }

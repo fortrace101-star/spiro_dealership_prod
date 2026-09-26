@@ -5,6 +5,7 @@ export interface Product {
   name: string
   category: string
   brand: string | null
+  supplier: string | null
   selling_price: number
   cost_price: number
   stock_qty: number

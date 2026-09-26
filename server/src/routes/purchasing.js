@@ -15,11 +15,13 @@ router.get('/catalog', async (req, res) => {
   // refreshed copy of the same set — see /api/auth/me).
   res.json({
     products,
-    can_receive: hasPermission(req.user, 'inventory_receive'),
+        can_receive: hasPermission(req.user, 'inventory_receive'),
     // Legacy flag read by older cached POS bundles to gate inline product
     // creation: creating products is part of receiving — same grant, so the
     // flag simply mirrors `can_receive` (all-or-nothing).
     can_create_products: hasPermission(req.user, 'inventory_receive'),
+    can_edit_products: hasPermission(req.user, 'product_edit'),
+    can_adjust_inventory: hasPermission(req.user, 'inventory_adjust'),
     can_reorder: hasPermission(req.user, 'reorder_create'),
     can_manage_reorders: hasPermission(req.user, 'reorder_manage'),
   });

@@ -17,6 +17,8 @@ import CreditModal, { creditBadgeCounts } from './CreditModal'
 import ReceivingScreen from './ReceivingScreen'
 import ReceiveSelectModal from './ReceiveSelectModal'
 import ReservationsModal from './ReservationsModal'
+import EditProductsModal from './EditProductsModal'
+import AdjustInventoryModal from './AdjustInventoryModal'
 import { cn } from '../lib/cn'
 
 // Permission sets that decide which toolbar/header entries render at all
@@ -54,12 +56,16 @@ export default function POSScreen() {
   const [showCheckout, setShowCheckout] = useState(false)
   const [receipt, setReceipt] = useState<LocalSale | null>(null)
   const [showHistory, setShowHistory] = useState(false)
-  const [stockMode, setStockMode] = useState<'receive-select' | 'reorder' | 'receive' | null>(null)
+  const [stockMode, setStockMode] = useState<'receive-select' | 'reorder' | 'receive' | 'edit-products' | 'adjust-inventory' | null>(null)
   const [sourceList, setSourceList] = useState<PurchasingRecord | null>(null)
+  const [editProductId, setEditProductId] = useState<string | null>(null)
+  const [adjustProductId, setAdjustProductId] = useState<string | null>(null)
   const [showReservations, setShowReservations] = useState(false)
   const [reserveBike, setReserveBike] = useState<Bike | null>(null)
   const [showAccount, setShowAccount] = useState(false)
   const [canReceive, setCanReceive] = useState(false)
+  const [canEditProducts, setCanEditProducts] = useState(false)
+  const [canAdjustInventory, setCanAdjustInventory] = useState(false)
   // Enforced capability set (role baseline ∪ admin grants) as reported by the
   // server. Refreshed on mount so a grant/revoke made on the Team page appears
   // without a re-login; the server re-checks every request regardless.
@@ -107,9 +113,17 @@ export default function POSScreen() {
   // when the admin granted `inventory_receive`). The same round trip refreshes
   // the whole capability set so manager-only screens (reservations) show up.
   useEffect(() => {
-    api.purchasingCatalog()
-      .then((r) => setCanReceive(r.can_receive))
-      .catch(() => setCanReceive(false))
+        api.purchasingCatalog()
+      .then((r) => {
+        setCanReceive(r.can_receive)
+        setCanEditProducts(r.can_edit_products)
+        setCanAdjustInventory(r.can_adjust_inventory)
+      })
+      .catch(() => {
+        setCanReceive(false)
+        setCanEditProducts(false)
+        setCanAdjustInventory(false)
+      })
     api
       .me()
       .then((r) => {
@@ -580,6 +594,21 @@ export default function POSScreen() {
                   )}
                 </button>
               )}
+              {(canEditProducts || canAdjustInventory) && (
+                <button
+                  className="btn-ghost text-xs"
+                  onClick={() => {
+                    if (stockMode === 'edit-products') setStockMode(null)
+                    else if (stockMode === 'adjust-inventory') setStockMode(null)
+                    else setStockMode(canEditProducts ? 'edit-products' : 'adjust-inventory')
+                  }}
+                >
+                  {stockMode === 'edit-products' || stockMode === 'adjust-inventory'
+                    ? '✕ Cancel'
+                    : (canEditProducts ? 'Edit products' : 'Adjust inventory')
+                  }
+                </button>
+              )}
             </div>
           </div>
           <input
@@ -642,11 +671,17 @@ export default function POSScreen() {
                   return (
                     <button
                       key={p.id}
-                      disabled={out}
-                      onClick={() => addProduct(p)}
+                      disabled={out && stockMode === null}
+                      onClick={() => {
+                        if (stockMode === 'edit-products') setEditProductId(p.id)
+                        else if (stockMode === 'adjust-inventory') setAdjustProductId(p.id)
+                        else addProduct(p)
+                      }}
                       className={cn(
-                        'card p-3 text-left hover:border-brand-500/50 transition disabled:opacity-40 disabled:cursor-not-allowed',
-                        out && 'hover:border-slate-800',
+                        'card p-3 text-left hover:border-brand-500/50 transition',
+                        (out && stockMode === null) && 'opacity-40 cursor-not-allowed',
+                        stockMode === 'edit-products' && 'border-brand-500/30',
+                        stockMode === 'adjust-inventory' && 'border-amber-500/30',
                       )}
                     >
                       <div className="text-[10px] text-slate-500 uppercase tracking-wide">{p.category}</div>
@@ -849,7 +884,6 @@ export default function POSScreen() {
           }}
         />
       )}
-
       {stockMode === 'reorder' && canReorder && (
         <ReceivingScreen
           mode="reorder"
@@ -858,7 +892,22 @@ export default function POSScreen() {
           onDone={(message) => { setStockMode(null); setFlash(message); void runSyncCycle('after-receive') }}
         />
       )}
+
+      {stockMode === 'edit-products' && editProductId && (
+        <EditProductsModal
+          productId={editProductId}
+          onClose={() => { setEditProductId(null); setStockMode(null) }}
+          onDone={(message) => { setStockMode(null); setEditProductId(null); setFlash(message); void runSyncCycle('after-edit') }}
+        />
+      )}
+
+      {stockMode === 'adjust-inventory' && adjustProductId && (
+        <AdjustInventoryModal
+          productId={adjustProductId}
+          onClose={() => { setAdjustProductId(null); setStockMode(null) }}
+          onDone={(message) => { setStockMode(null); setAdjustProductId(null); setFlash(message); void runSyncCycle('after-adjust') }}
+        />
+      )}
     </div>
   )
 }
-

@@ -22,7 +22,7 @@ router.use(requireAuth);
 /** Full catalog snapshot for POS bootstrap (products + bikes in stock) */
 router.get('/catalog', async (req, res) => {
   const products = await many(
-    `SELECT id, sku, barcode, name, category, brand, selling_price, cost_price, stock_qty, min_stock, reorder_level, updated_at
+    `SELECT id, sku, barcode, name, category, brand, supplier, selling_price, cost_price, stock_qty, min_stock, reorder_level, updated_at
        FROM products WHERE active = TRUE ORDER BY name`
   );
   const bikes = await many(
@@ -36,6 +36,51 @@ router.get('/catalog', async (req, res) => {
     categories: categories.map((c) => c.category),
     server_time: new Date().toISOString(),
   });
+});
+
+/** Update a product — requires the `product_edit` grant (or inventory_receive for
+ *  creating new SKUs inline, which is part of the receive flow). */
+router.put('/products/:id', requirePermission('product_edit'), async (req, res) => {
+  try {
+    const before = await one(`SELECT * FROM products WHERE id = $1`, [req.params.id]);
+    if (!before) return res.status(404).json({ error: 'Product not found' });
+    const p = { ...before, ...req.body };
+    const rec = await one(
+      `UPDATE products SET sku=$2, barcode=$3, name=$4, category=$5, brand=$6, supplier=$7,
+         cost_price=$8, selling_price=$9, min_stock=$10, reorder_level=$11, active=$12, updated_at=now()
+       WHERE id=$1 RETURNING *`,
+      [req.params.id, p.sku, p.barcode || null, p.name, p.category, p.brand || null, p.supplier || null,
+       Number(p.cost_price) || 0, Number(p.selling_price) || 0, Number(p.min_stock) || 5,
+       Number(p.reorder_level) || 10, p.active !== false]
+    );
+    await audit({ userId: req.user.id, action: 'update_product', entity: 'product', entityId: rec.id, oldValue: before, newValue: rec });
+    res.json({ product: rec });
+  } catch (err) {
+    console.error('[pos/products/:id]', err);
+    res.status(500).json({ error: 'Failed to update product', detail: err.message });
+  }
+});
+
+/** Adjust inventory (correct stock counts, mark damaged, transfers, etc.) —
+ *  requires the `inventory_adjust` grant. */
+router.post('/inventory/adjust', requirePermission('inventory_adjust'), async (req, res) => {
+  const { product_id, qty, note, type = 'adjustment' } = req.body || {};
+  const product = await one(`SELECT * FROM products WHERE id = $1`, [product_id]);
+  if (!product) return res.status(404).json({ error: 'Product not found' });
+  const delta = Number(qty);
+  if (!Number.isInteger(delta) || delta === 0) return res.status(400).json({ error: 'qty must be a non-zero integer' });
+  const newQty = product.stock_qty + delta;
+  if (newQty < 0) return res.status(400).json({ error: `Resulting stock would be negative (${product.stock_qty} now)` });
+  await one(`UPDATE products SET stock_qty = stock_qty + $1, updated_at = now() WHERE id = $2`, [delta, product_id]);
+  const types = ['purchase', 'adjustment', 'damaged', 'workshop', 'transfer', 'return'];
+  const mv = await one(
+    `INSERT INTO stock_movements (product_id, qty, type, user_id, note)
+     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [product_id, delta, types.includes(type) ? type : 'adjustment', req.user.id, note || null]
+  );
+  await audit({ userId: req.user.id, action: 'stock_adjustment', entity: 'product', entityId: product_id,
+    oldValue: { stock_qty: product.stock_qty }, newValue: { stock_qty: newQty }, meta: { note } });
+  res.status(201).json({ movement: mv, stock_qty: newQty });
 });
 
 /** Record a sale (idempotent via client_txn_id) — used by POS online checkout & sync */

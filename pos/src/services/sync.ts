@@ -114,7 +114,7 @@ async function pullChanges(): Promise<void> {
 }
 
 /** One full sync cycle: health check → push pending → pull changes. */
-export async function runSyncCycle(reason: 'interval' | 'online-event' | 'manual' | 'after-sale' | 'after-reservation' | 'after-receive'): Promise<void> {
+export async function runSyncCycle(reason: 'interval' | 'online-event' | 'manual' | 'after-sale' | 'after-reservation' | 'after-receive' | 'after-edit' | 'after-adjust'): Promise<void> {
   if (status.syncing) return
   update({ syncing: true, lastAttemptAt: new Date().toISOString() })
   try {

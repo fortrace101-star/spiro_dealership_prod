@@ -39,6 +39,8 @@ const PERM_GROUPS: { group: string; options: { id: PosPermission; label: string;
       { id: 'inventory_receive', label: 'Receive stock', hint: 'Record consignments, create new SKUs and start a standalone restock — the whole receive flow' },
       { id: 'reorder_create', label: 'Create reorder lists', hint: 'Draft what to order next — never changes stock' },
       { id: 'reorder_manage', label: 'Manage reorder lists', hint: 'Mark a list processed / fulfilled / cancelled' },
+      { id: 'product_edit', label: 'Edit products', hint: 'Modify existing product info (name, SKU, price, barcode, supplier, category) — manager by default' },
+      { id: 'inventory_adjust', label: 'Adjust inventory', hint: 'Correct stock counts, mark damaged/transfer/adjust quantities — manager by default' },
     ],
   },
 ]

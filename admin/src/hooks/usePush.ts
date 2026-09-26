@@ -1,5 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
+  import { useCallback, useEffect, useState } from 'react'
 import { api, getToken } from '../lib/api'
+
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const raw = window.atob(base64)
+  const output = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i)
+  return output
+}
 
 /** Short two-tone chime (~0.4s) for push toasts. Exported so Layout can play
  *  it when a push arrives; Web Audio needs no audio file and respects the
@@ -30,17 +39,15 @@ export function playPushChime(): void {
   }
 }
 
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
-  const raw = window.atob(base64)
-  const output = new Uint8Array(raw.length)
-  for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i)
-  return output
-}
-
 export type PushState = 'unsupported' | 'denied' | 'prompt' | 'subscribed' | 'unsubscribed'
 
+/**
+ * Admin dashboard Web Push subscription.
+ * On supported browsers + secure origin, registers /sw.js (vite-plugin-pwa),
+ * subscribes the user via VAPID, and persists the endpoint to the server.
+ * State is 'unsupported' when PushManager isn't available — a descriptive
+ * error message explains whether the cause is insecure origin or browser.
+ */
 export function usePush() {
   const [state, setState] = useState<PushState>('unsubscribed')
   const [busy, setBusy] = useState(false)
@@ -50,6 +57,15 @@ export function usePush() {
 
   const detect = useCallback(async () => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      const isSecure = location.protocol === 'https:' ||
+        location.hostname === 'localhost' ||
+        location.hostname === '127.0.0.1' ||
+        location.hostname === '::1'
+      if (!isSecure) {
+        setError('Push notifications require HTTPS. This site is served over HTTP — use https:// or access via localhost.')
+      } else {
+        setError('This browser does not support push notifications. Try Chrome, Edge, or Firefox.')
+      }
       setState('unsupported')
       return
     }
@@ -62,19 +78,10 @@ export function usePush() {
     setState(sub ? 'subscribed' : Notification.permission === 'granted' ? 'unsubscribed' : 'prompt')
   }, [])
 
-  useEffect(() => {
-    // Only enable after login (token present)
-    if (!getToken()) return
-    detect().catch(() => setState('unsupported'))
-  }, [detect])
-
   const enable = useCallback(async () => {
     setBusy(true)
     setError('')
     try {
-      // Browsers block the permission prompt silently once the user (or a
-      // previous dismiss) has denied it — surface that instead of failing
-      // quietly inside pushManager.subscribe.
       if ('Notification' in window && Notification.permission === 'denied') {
         setError('Notifications are blocked for this site. Click the lock icon in the address bar, set Notifications to Allow, then click Enable alerts again.')
         return false
@@ -125,5 +132,13 @@ export function usePush() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!getToken()) return
+    detect().catch(() => setState('unsupported'))
+  }, [detect])
+
   return { state, busy, error, enable, sendTest, refresh: detect }
 }
+
+export default usePush
+

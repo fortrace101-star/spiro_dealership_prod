@@ -16,12 +16,16 @@ const { hasPermission, normalizeRole } = require('../permissions/catalog');
  */
 function requirePermission(permission, opts = {}) {
   const { unlessRoles = [] } = opts;
+  // Allow either a single permission string or an array (any-of). This lets a
+  // route accept e.g. ['inventory_receive', 'product_edit'] so that either the
+  // general receive grant or the dedicated edit grant satisfies the guard.
+  const perms = Array.isArray(permission) ? permission : [permission];
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
     if (unlessRoles.map(normalizeRole).includes(normalizeRole(req.user.role))) return next();
-    if (hasPermission(req.user, permission)) return next();
+    if (perms.some((p) => hasPermission(req.user, p))) return next();
 
-    return res.status(403).json({ error: `Missing permission: ${permission}` });
+    return res.status(403).json({ error: `Missing permission: ${perms.join(' or ')}` });
   };
 }
 

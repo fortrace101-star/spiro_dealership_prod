@@ -142,6 +142,20 @@ const PERMISSIONS = [
     roles: ['manager'],
   },
   {
+    id: 'product_edit',
+    group: 'Stock',
+    label: 'Edit products',
+    hint: 'Modify existing product info (name, SKU, price, barcode, supplier, category) — manager only, admin can elevate an operator',
+    roles: ['manager'],
+  },
+  {
+    id: 'inventory_adjust',
+    group: 'Stock',
+    label: 'Adjust inventory',
+    hint: 'Correct stock counts, mark damaged/transfer/adjust quantities — manager only, admin can elevate an operator',
+    roles: ['manager'],
+  },
+  {
     id: 'discount_apply',
     group: 'Sales',
     label: 'Apply discounts',
