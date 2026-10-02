@@ -8,6 +8,7 @@ import { api } from '../lib/api'
 import { compactUgx, dateTime, num, PAYMENT_LABELS, timeAgo, ugx } from '../lib/format'
 import { PERIODS } from '../lib/periods'
 import type { Period } from '../lib/periods'
+import { downloadPeriodReport } from '../lib/report'
 import type { Approval, HourlyPoint, Product, RangeReport, ReservationToday, Sale, TodayReport } from '../lib/types'
 import { cn } from '../lib/cn'
 import { Badge, EmptyState, KpiCard, PageHeader, Spinner } from '../components/ui'
@@ -33,6 +34,11 @@ export default function OverviewPage() {
   const [detail, setDetail] = useState<CardDetail | null>(null)
   const [period, setPeriod] = useState<Period>(PERIODS[0])
   const [range, setRange] = useState<RangeReport | null>(null)
+  const [reportBusy, setReportBusy] = useState(false)
+  // Payment mix follows the selected period (today = /reports/today, otherwise
+  // the resolved from/to window) so the donut never shows today's data under
+  // a range title.
+  const [mix, setMix] = useState<{ name: string; value: number }[]>([])
 
   const load = useCallback(async () => {
     try {
@@ -46,20 +52,23 @@ export default function OverviewPage() {
         setToday(t)
         setHourly(h.series)
         setRange(null)
+        setMix(t.payments.map((p) => ({ name: PAYMENT_LABELS[p.payment_method] || p.payment_method, value: Number(p.amount) })))
         setTop(tp.products.slice(0, 7).map((p) => ({ ...p, revenue: Number(p.revenue), profit: Number(p.profit) })))
         setLow(ls.products.slice(0, 6))
       } else {
         const win = period.from && period.to ? { from: period.from, to: period.to } : undefined
         const dayCount = period.days ?? 30
-        const [t, tp, ls, rng] = await Promise.all([
+        const [t, tp, ls, rng, pay] = await Promise.all([
           api.today(),
           api.topProducts(30, 'revenue'),
           api.lowStock(),
           api.range(dayCount, win),
+          api.payments(dayCount, win),
         ])
         setToday(t)
         setHourly([])
         setRange(rng)
+        setMix(pay.payments.map((p) => ({ name: PAYMENT_LABELS[p.payment_method] || p.payment_method, value: Number(p.amount) })))
         setTop(tp.products.slice(0, 7).map((p) => ({ ...p, revenue: Number(p.revenue), profit: Number(p.profit) })))
         setLow(ls.products.slice(0, 6))
       }
@@ -141,10 +150,22 @@ export default function OverviewPage() {
 
   const t = today?.today
   const res = today?.reservations
-  const donut = today?.payments.map((p) => ({ name: PAYMENT_LABELS[p.payment_method] || p.payment_method, value: Number(p.amount) })) ?? []
+  const donut = mix
   const partsRev = Number(today?.items.find((i) => i.kind === 'part')?.amount || 0)
   const bikesRev = Number(today?.items.find((i) => i.kind === 'bike')?.amount || 0)
   const margin = t && t.revenue ? ((t.profit / t.revenue) * 100).toFixed(1) : '0.0'
+
+  async function downloadReport() {
+    if (reportBusy) return
+    setReportBusy(true)
+    try {
+      await downloadPeriodReport(period)
+    } catch (err) {
+      console.error('Report download failed', err)
+    } finally {
+      setReportBusy(false)
+    }
+  }
 
   return (
     <div>
@@ -153,9 +174,19 @@ export default function OverviewPage() {
         subtitle={period.id === 'today' ? new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : period.label}
       />
 
-      {/* Period filter — drives the KPI grid and graph below (moved here from Settings) */}
-      <div className="card p-3 mb-4">
-        <PeriodPicker period={period} onChange={setPeriod} variant="select" />
+      {/* Period filter (narrow) + Download Report for the selected period */}
+      <div className="card p-3 mb-4 flex items-center gap-3">
+        <div className="w-[220px] shrink-0">
+          <PeriodPicker period={period} onChange={setPeriod} variant="select" />
+        </div>
+        <button
+          className="btn-primary text-xs ml-auto shrink-0"
+          onClick={() => void downloadReport()}
+          disabled={reportBusy}
+          title={`Download a PDF report for ${period.label}`}
+        >
+          {reportBusy ? 'Preparing…' : '⤓ Download Report'}
+        </button>
       </div>
 
       {/* KPI row — 2×2 at every breakpoint, period-aligned */}
@@ -197,7 +228,7 @@ export default function OverviewPage() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mt-4">
         <div className="card p-5 xl:col-span-2">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-white">Revenue today (hourly)</h3>
+            <h3 className="font-semibold text-white">{period.id === 'today' ? 'Revenue today (hourly)' : 'Revenue'}</h3>
             <div className="flex items-center gap-4 text-xs text-slate-500">
               <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-brand-400" /> Revenue</span>
               <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-sky-400" /> Profit</span>
@@ -231,9 +262,9 @@ export default function OverviewPage() {
         </div>
 
         <div className="card p-5">
-          <h3 className="font-semibold text-white mb-4">Payment mix today</h3>
+          <h3 className="font-semibold text-white mb-4">{period.id === 'today' ? 'Payment mix today' : 'Payment Mix'}</h3>
           {donut.length === 0 ? (
-            <EmptyState message="No payments yet today" />
+            <EmptyState message={period.id === 'today' ? 'No payments yet today' : 'No payments in this period'} />
           ) : (
             <>
               <div className="h-44">

@@ -63,7 +63,9 @@ export default function POSScreen() {
   const [showReservations, setShowReservations] = useState(false)
   const [reserveBike, setReserveBike] = useState<Bike | null>(null)
   const [showAccount, setShowAccount] = useState(false)
-  const [editingPrice, setEditingPrice] = useState<{ key: string; temp: string } | null>(null)
+  // Per-line price editing in the cart: which item's unit price is being edited
+  const [editingPriceKey, setEditingPriceKey] = useState<string | null>(null)
+  const [draftPrice, setDraftPrice] = useState('')
   const [canReceive, setCanReceive] = useState(false)
   const [canEditProducts, setCanEditProducts] = useState(false)
   const [canAdjustInventory, setCanAdjustInventory] = useState(false)
@@ -238,7 +240,7 @@ export default function POSScreen() {
 
   const addProduct = useCallback(
     (p: Product, qty = 1) => {
-      cart.addItem({ kind: 'part', id: p.id, name: p.name, sku: p.sku, unit_price: Number(p.selling_price), unit_cost: Number(p.cost_price), stock_qty: p.stock_qty }, qty)
+      cart.addItem({ kind: 'part', id: p.id, name: p.name, sku: p.sku, unit_price: Number(p.selling_price), unit_cost: Number(p.cost_price), stock_qty: p.stock_qty, priceOverride: null }, qty)
       setFlash(`${p.name} added`)
     },
     [cart],
@@ -246,7 +248,7 @@ export default function POSScreen() {
 
   const addBike = useCallback(
     (b: Bike) => {
-      cart.addItem({ kind: 'bike', id: b.id, name: `${b.model}${b.color ? ` · ${b.color}` : ''}`, sku: b.vin, unit_price: Number(b.selling_price), unit_cost: Number(b.cost_price), stock_qty: 1 })
+      cart.addItem({ kind: 'bike', id: b.id, name: `${b.model}${b.color ? ` · ${b.color}` : ''}`, sku: b.vin, unit_price: Number(b.selling_price), unit_cost: Number(b.cost_price), stock_qty: 1, priceOverride: null })
       setFlash(`${b.model} added`)
     },
     [cart],
@@ -367,20 +369,6 @@ export default function POSScreen() {
 
   const totals = cartTotals(cart.items)
 
-  /**
-   * Commit an inline price override for one cart line.
-   *
-   * Upward only: a figure at or below the catalogue price is refused, so the
-   * terminal can never undersell an item. `cart.setPrice` stores the override
-   * on the line and checkout sends that effective price to the server.
-   */
-  function commitPrice(key: string, catalogPrice: number) {
-    const next = Number(editingPrice?.temp ?? '')
-    if (!Number.isFinite(next) || next <= catalogPrice) return
-    cart.setPrice(key, next)
-    setEditingPrice(null)
-  }
-
   // Discounts are admin-only, so the checkout payload never carries one.
   // Stock-in / reservations below are gated on the capability set the server
   // computes for this user (role baseline ∪ admin grants).
@@ -399,9 +387,9 @@ export default function POSScreen() {
         name: i.name,
         kind: i.kind,
         qty: i.qty,
-        unit_price: i.unit_price_override ?? i.unit_price,
+        unit_price: i.priceOverride ?? i.unit_price,
         unit_cost: i.unit_cost,
-        line_total: (i.unit_price_override ?? i.unit_price) * i.qty,
+        line_total: (i.priceOverride ?? i.unit_price) * i.qty,
       })),
     })
 
@@ -743,81 +731,86 @@ export default function POSScreen() {
                 <div className="text-xs mt-2 text-slate-700">Scanner input lands here automatically</div>
               </div>
             )}
-            {cart.items.map((i) => (
-              <div key={i.key} className="card p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-white truncate">{i.name}</div>
-                    {i.sku && <div className="text-[10px] font-mono text-slate-500">{i.sku}</div>}
-                  </div>
-                  <button className="text-slate-600 hover:text-red-400 text-xs" onClick={() => cart.removeItem(i.key)}>×</button>
-                </div>
-                <div className="flex items-center justify-between mt-2">
-                  {i.kind === 'bike' ? (
-                    <span className="text-xs text-slate-500">Qty 1 (serialized)</span>
-                  ) : (
-                    <div className="flex items-center gap-1.5">
-                      <button className="h-6 w-6 rounded-md bg-slate-800 text-slate-300 text-sm leading-none" onClick={() => cart.setQty(i.key, i.qty - 1)}>−</button>
-                      <span className="w-8 text-center text-sm font-semibold">{i.qty}</span>
-                      <button
-                        className="h-6 w-6 rounded-md bg-slate-800 text-slate-300 text-sm leading-none disabled:opacity-30"
-                        disabled={i.qty >= i.stock_qty}
-                        onClick={() => cart.setQty(i.key, i.qty + 1)}
-                      >+</button>
+            {cart.items.map((i) => {
+              const effectivePrice = i.priceOverride ?? i.unit_price
+              return (
+                <div key={i.key} className="card p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-white truncate">{i.name}</div>
+                      {i.sku && <div className="text-[10px] font-mono text-slate-500">{i.sku}</div>}
                     </div>
-                  )}
-                  {(editingPrice?.key === i.key) ? (
-                      <div className="flex flex-col items-end gap-1">
-                        <div className="flex items-center gap-1.5">
+                    <button className="text-slate-600 hover:text-red-400 text-xs" onClick={() => cart.removeItem(i.key)}>×</button>
+                  </div>
+                  <div className="flex items-center justify-between mt-2">
+                    {i.kind === 'bike' ? (
+                      <span className="text-xs text-slate-500">Qty 1 (serialized)</span>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <button className="h-6 w-6 rounded-md bg-slate-800 text-slate-300 text-sm leading-none" onClick={() => cart.setQty(i.key, i.qty - 1)}>−</button>
+                        <span className="w-8 text-center text-sm font-semibold">{i.qty}</span>
+                        <button
+                          className="h-6 w-6 rounded-md bg-slate-800 text-slate-300 text-sm leading-none disabled:opacity-30"
+                          disabled={i.qty >= i.stock_qty}
+                          onClick={() => cart.setQty(i.key, i.qty + 1)}
+                        >+</button>
+                      </div>
+                    )}
+                    <div className="flex flex-col items-end gap-1">
+                      {i.priceOverride ? (
+                        <div className="text-right">
+                          <span className="text-xs text-slate-500 line-through">{ugx(i.unit_price)}</span>
+                          <div className="text-sm font-bold text-brand-300">{ugx(i.priceOverride)}</div>
+                        </div>
+                      ) : (
+                        <span className="text-sm font-bold text-brand-300">{ugx(effectivePrice)}</span>
+                      )}
+                      {editingPriceKey === i.key ? (
+                        <div className="flex items-center gap-1 mt-1">
                           <input
                             type="number"
-                            className={cn(
-                              'w-32 rounded-md border bg-slate-900 px-2 py-1 text-right text-sm font-bold tabular-nums text-white outline-none',
-                              Number(editingPrice!.temp) > i.unit_price
-                                ? 'border-sky-500/60 focus:border-sky-400'
-                                : 'border-red-500/70',
-                            )}
-                            value={editingPrice!.temp}
-                            onChange={(e) => setEditingPrice({ ...editingPrice!, temp: e.target.value })}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') { e.preventDefault(); commitPrice(i.key, i.unit_price) }
-                              if (e.key === 'Escape') setEditingPrice(null)
-                            }}
+                            min={i.unit_price}
+                            step="100"
+                            className="input w-28 text-sm text-right h-7"
+                            value={draftPrice}
+                            onChange={(e) => setDraftPrice(e.target.value)}
                             autoFocus
                           />
                           <button
-                            className="text-green-400 hover:text-green-300 text-base leading-none shrink-0 disabled:opacity-40"
-                            disabled={Number.isNaN(Number(editingPrice!.temp)) || Number(editingPrice!.temp) <= i.unit_price}
-                            onClick={() => commitPrice(i.key, i.unit_price)}
-                            title={`Save new price (minimum ${ugx(i.unit_price)})`}
+                            className="text-green-400 hover:text-green-300 text-xs h-7 px-2"
+                            onClick={() => {
+                              const val = Number(draftPrice)
+                              cart.setPriceOverride(i.key, val >= i.unit_price ? val : null)
+                              setEditingPriceKey(null)
+                              setDraftPrice('')
+                              setFlash(val >= i.unit_price ? `Price updated to ${ugx(val * i.qty)}` : 'Price reset to list')
+                            }}
                           >✓</button>
                           <button
-                            className="text-red-400 hover:text-red-300 text-base leading-none shrink-0"
-                            onClick={() => setEditingPrice(null)}
-                            title="Cancel"
-                          >✕</button>
+                            className="text-slate-500 hover:text-slate-400 text-xs h-7 px-2"
+                            onClick={() => {
+                              cart.setPriceOverride(i.key, i.priceOverride)
+                              setEditingPriceKey(null)
+                              setDraftPrice('')
+                            }}
+                          >×</button>
                         </div>
-                        <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
-                          <span className="line-through">{ugx((i.unit_price_override ?? i.unit_price) * i.qty)}</span>
-                          <span>min {ugx(i.unit_price)} per unit — prices only go up</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2">
+                      ) : (
                         <button
-                          className="text-[11px] font-semibold text-sky-400 hover:text-sky-300 underline underline-offset-2 shrink-0"
-                          onClick={() => setEditingPrice({ key: i.key, temp: String(i.unit_price_override ?? i.unit_price + 1) })}
-                          title={`Edit selling price · minimum ${ugx(i.unit_price)}`}
-                        >Edit</button>
-                        <span className="text-sm font-bold text-brand-300 tabular-nums">{ugx((i.unit_price_override ?? i.unit_price) * i.qty)}</span>
-                        {i.unit_price_override != null && (
-                          <span className="text-[10px] text-sky-400 shrink-0">(override)</span>
-                        )}
-                      </div>
-                    )}
+                          className="text-xs text-slate-500 hover:text-brand-300"
+                          onClick={() => {
+                            setEditingPriceKey(i.key)
+                            setDraftPrice(String(i.priceOverride ?? i.unit_price))
+                          }}
+                        >
+                          {i.priceOverride ? 'Change price' : 'Edit price'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
 
           <div className="border-t border-slate-800/70 p-4 space-y-2">

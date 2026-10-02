@@ -335,11 +335,14 @@ export default function TeamPage() {
 
       {/* Staff performance — relocated from Settings; period-filtered */}
       <section className="card p-5 mt-4">
-        <div className="flex items-center justify-between mb-4">
+        {/* Title on its own row so the picker (and its custom-range panel,
+            which spans the full card width) never gets boxed into a 208px
+            column — the same pattern the Overview filter uses. */}
+        <div className="mb-4">
           <h3 className="font-semibold text-white">Staff performance</h3>
-          <div className="w-52">
-            <PeriodPicker period={period} onChange={setPeriod} variant="select" />
-          </div>
+        </div>
+        <div className="w-full sm:max-w-[260px] mb-4">
+          <PeriodPicker period={period} onChange={setPeriod} variant="select" />
         </div>
         {cashiers === null ? (
           <Spinner />
@@ -377,15 +380,14 @@ export default function TeamPage() {
         <Modal title="Generate activation code" onClose={() => setShowForm(false)}>
           <form onSubmit={createCode} className="space-y-3">
             <Field label="Label (e.g. Kampala Road counter)"><input className="input" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} /></Field>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Field label="Role">
-                <select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-                  <option value="operator">Operator (POS)</option>
-                  <option value="manager">Manager</option>
-                </select>
-              </Field>
-              <Field label="Valid for (days)"><input className="input" type="number" value={form.days} onChange={(e) => setForm({ ...form, days: e.target.value })} /></Field>
-            </div>
+            {/* Role only — validity stays at the server-side 7-day default,
+                so the "Valid for (days)" field was dropped from this form. */}
+            <Field label="Role">
+              <select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+                <option value="operator">Operator (POS)</option>
+                <option value="manager">Manager</option>
+              </select>
+            </Field>
             <Field label="Extra POS permissions (what this user can do beyond their role)">
               <div className="space-y-2">
                 {PERM_OPTIONS.map((p) => (

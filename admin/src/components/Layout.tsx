@@ -17,12 +17,12 @@ const NAV = [
   { to: '/inventory', label: 'Inventory', icon: 'M20 7l-8-4-8 4v10l8 4 8-4V7zM4 7l8 4m0 0l8-4m-8 4v10' },
   { to: '/purchasing', label: 'Purchasing', icon: 'M9 17V7m4 10V4m4 13v-6M5 21h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2z' },
   { to: '/bikes', label: 'Bikes / VIN', icon: 'M13 10V3L4 14h7v7l9-11h-7z' },
-  { to: '/jobs', label: 'Service Jobs', icon: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32c-.22-.1-.47-.04-.59.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.47-.41h-3.84a.484.484 0 0 0-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.94 7.29a.49.49 0 0 0 .05.61l2.03 1.59c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.486.486 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.4.47.4h3.84c.24 0 .44-.2.47-.4l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.13-.47.05-.61l-2.01-1.58ZM12.75 16.5a3.75 3.75 0 1 0 0-7.5 3.75 3.75 0 0 0 0 7.5Z' },
   { to: '/customers', label: 'Customers', icon: 'M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zm14 10v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75' },
   { to: '/team', label: 'Team & Codes', icon: 'M12 4.35a4 4 0 100 6.3 4 4 0 000-6.3zM5 21v-2a6 6 0 0114 0v2' },
   { to: '/approvals', label: 'Approvals', icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' },
   { to: '/audit', label: 'Audit Trail', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 104 0M9 5a2 2 0 014 0m-6 9l2 2 4-4' },
-  { to: '/settings', label: 'Settings', icon: 'M10.325 4.317a1.724 1.724 0 012.573-1.066 1.724 1.724 0 012.242 0 1.724 1.724 0 011.066 2.573 1.724 1.724 0 001.066 2.242 1.724 1.724 0 010 2.242 1.724 1.724 0 01-2.573 1.066 1.724 1.724 0 01-2.242 0 1.724 1.724 0 01-1.066-2.573 1.724 1.724 0 00-1.066-2.242 1.724 1.724 0 010-2.242zM15 12a3 3 0 11-6 0 3 3 0 016 0z' },
+  // Gear icon (Feather settings) — reads unmistakably as a cog at 18px.
+  { to: '/settings', label: 'Settings', icon: 'M12 15a3 3 0 100-6 3 3 0 000 6z M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z' },
 ]
 
 function NavBadges({ badges }: { badges: Array<{ count: number | null; title: string; className: string }> }) {
@@ -254,7 +254,7 @@ export default function Layout() {
               {item.to === '/purchasing' && (
                 <NavBadges
                   badges={[
-                    { count: reorderCount, title: 'Active reorder lists needing fulfillment', className: 'bg-sky-500' },
+                    { count: reorderCount, title: 'Active reorder lists needing fulfillment', className: 'bg-orange-500' },
                     { count: lowStockCount, title: 'Products under-stocked or out of stock', className: 'bg-red-500' },
                   ]}
                 />

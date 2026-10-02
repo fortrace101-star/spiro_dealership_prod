@@ -10,8 +10,8 @@ interface CartState {
 
   addItem: (item: Omit<CartItem, 'key' | 'qty'>, qty?: number) => void
   setQty: (key: string, qty: number) => void
-  setPrice: (key: string, price: number) => void
   removeItem: (key: string) => void
+  setPriceOverride: (key: string, priceOverride: number | null) => void
   clearCart: () => void
   setCustomer: (c: CartCustomer | null) => void
   setPaymentMethod: (m: PaymentMethod) => void
@@ -39,7 +39,7 @@ export const useCart = create<CartState>((set) => ({
         }
       }
       return {
-        items: [...state.items, { ...item, key, qty: Math.min(qty, Math.max(stockCap, 1)) }],
+        items: [...state.items, { ...item, key, qty: Math.min(qty, Math.max(stockCap, 1)), priceOverride: null }],
       }
     }),
 
@@ -51,9 +51,9 @@ export const useCart = create<CartState>((set) => ({
           : state.items.map((i) => (i.key === key ? { ...i, qty } : i)),
     })),
 
-  setPrice: (key, price) =>
+  setPriceOverride: (key, priceOverride) =>
     set((state) => ({
-      items: state.items.map((i) => (i.key === key ? { ...i, unit_price_override: price } : i)),
+      items: state.items.map((i) => (i.key === key ? { ...i, priceOverride } : i)),
     })),
 
   removeItem: (key) => set((state) => ({ items: state.items.filter((i) => i.key !== key) })),
@@ -71,6 +71,6 @@ export const useCart = create<CartState>((set) => ({
  * respected when present on a line item.
  */
 export function cartTotals(items: CartItem[]) {
-  const subtotal = items.reduce((s, i) => s + (i.unit_price_override ?? i.unit_price) * i.qty, 0)
+  const subtotal = items.reduce((s, i) => s + (i.priceOverride ?? i.unit_price) * i.qty, 0)
   return { subtotal, total: subtotal }
 }

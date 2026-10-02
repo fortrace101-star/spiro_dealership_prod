@@ -64,3 +64,18 @@ export function customPeriod(days?: number, from?: string, to?: string): Period 
   const d = Math.min(Math.max(Number(days) || 30, 1), 730)
   return { id: 'custom', label: `Last ${d} days`, short: `${d}d`, days: d }
 }
+
+/**
+ * Resolve a Period to a concrete { from, to } ISO-date window (inclusive).
+ * Named presets with explicit from/to pass through; day-count presets
+ * (today, 3d, 2w, custom N-days) anchor `to` on today. Shared by the
+ * Overview download + on-screen period titles so both always agree.
+ */
+export function resolveRange(period: Period): { from: string; to: string } {
+  if (period.from && period.to) return { from: period.from, to: period.to }
+  const days = period.days ?? 1
+  const to = iso(new Date())
+  const d = new Date()
+  d.setDate(d.getDate() - (days - 1))
+  return { from: iso(d), to }
+}

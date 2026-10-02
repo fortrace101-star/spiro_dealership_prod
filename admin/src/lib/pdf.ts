@@ -68,6 +68,152 @@ export class PdfWriter {
   }
 
   /** Table with repeating header across page breaks; rows wrap cell text. */
+  sectionTitle(text: string): this {
+    const d = this.doc
+    // Keep the heading with the content that follows it.
+    if (this.y > BOTTOM - 18) {
+      d.addPage()
+      this.y = MARGIN
+    }
+    d.setFont('helvetica', 'bold')
+    d.setFontSize(11)
+    d.setTextColor(15, 23, 42)
+    d.text(text, MARGIN, this.y + 3)
+    this.y += lh(11) + 5
+    return this
+  }
+
+  /** Key/value lines under a section title (KPI summary block). */
+  keyValues(pairs: { label: string; value: string }[], columns = 2): this {
+    const d = this.doc
+    const colW = CONTENT_W / columns
+    const rowH = lh(10) + 5
+    let row = 0
+    let col = 0
+    const drawPair = (label: string, value: string, c: number, y: number) => {
+      const x = MARGIN + c * colW
+      d.setFont('helvetica', 'normal')
+      d.setFontSize(9)
+      d.setTextColor(100, 116, 139)
+      d.text(label, x, y)
+      d.setFont('helvetica', 'bold')
+      d.setFontSize(11)
+      d.setTextColor(15, 23, 42)
+      d.text(value, x, y + lh(11))
+    }
+    for (const p of pairs) {
+      const y = this.y + row * rowH
+      if (y + rowH > BOTTOM) {
+        d.addPage()
+        this.y = MARGIN
+        row = 0
+        col = 0
+      }
+      drawPair(p.label, p.value, col, this.y + row * rowH)
+      col += 1
+      if (col >= columns) {
+        col = 0
+        row += 1
+      }
+    }
+    if (col !== 0) row += 1
+    this.y += row * rowH + 6
+    return this
+  }
+
+  /** Vertical bars drawn as native PDF rectangles (no rasterisation needed). */
+  barChart(opts: { labels: string[]; values: number[]; values2?: number[]; height?: number; legend?: [string, string] }): this {
+    const d = this.doc
+    const height = opts.height ?? 52
+    if (this.y + height + 18 > BOTTOM) {
+      d.addPage()
+      this.y = MARGIN
+    }
+    const top = this.y
+    const base = top + height
+    const max = Math.max(1, ...opts.values, ...(opts.values2 ?? []))
+    const n = opts.values.length
+    const slot = CONTENT_W / Math.max(n, 1)
+    const barW = Math.min(14, Math.max(3, slot * 0.32))
+    const COLORS: Array<[number, number, number]> = [[18, 183, 106], [14, 165, 233]]
+    opts.values.forEach((v, i) => {
+      const series: Array<{ val: number; color: [number, number, number] }> = [{ val: v, color: COLORS[0] }]
+      if (opts.values2) series.push({ val: opts.values2[i] ?? 0, color: COLORS[1] })
+      series.forEach((s, j) => {
+        const h = Math.max(v === 0 && s.val === 0 ? 0 : 0.8, (s.val / max) * height)
+        const cx = MARGIN + slot * i + slot / 2 + (j - (series.length - 1) / 2) * (barW + 1.5)
+        d.setFillColor(...s.color)
+        d.rect(cx - barW / 2, base - h, barW, h, 'F')
+      })
+      const lab = opts.labels[i] ?? ''
+      if (slot > 16 || i % Math.ceil(n / Math.max(1, Math.floor(CONTENT_W / 16))) === 0) {
+        d.setFont('helvetica', 'normal')
+        d.setFontSize(7)
+        d.setTextColor(100, 116, 139)
+        d.text(lab, MARGIN + slot * i + slot / 2, base + 4, { align: 'center' })
+      }
+    })
+    // Baseline rule + max tick.
+    d.setDrawColor(203, 213, 225)
+    d.setLineWidth(0.3)
+    d.line(MARGIN, base, MARGIN + CONTENT_W, base)
+    d.setFont('helvetica', 'normal')
+    d.setFontSize(7)
+    d.setTextColor(100, 116, 139)
+    d.text(fmtCompact(max), MARGIN + CONTENT_W, top + 2, { align: 'right' })
+    d.text('0', MARGIN + CONTENT_W, base, { align: 'right' })
+    this.y = base + 10
+    if (opts.legend && opts.values2) {
+      d.setFont('helvetica', 'normal')
+      d.setFontSize(8)
+      d.setTextColor(100, 116, 139)
+      const [l1, l2] = opts.legend
+      d.setFillColor(...COLORS[0])
+      d.circle(MARGIN + 2, this.y - 1.2, 1.2, 'F')
+      d.text(l1, MARGIN + 5, this.y)
+      d.setFillColor(...COLORS[1])
+      d.circle(MARGIN + 42, this.y - 1.2, 1.2, 'F')
+      d.text(l2, MARGIN + 45, this.y)
+      this.y += 6
+    }
+    return this
+  }
+
+  /** Horizontal proportional bars + amount labels (payment mix). */
+  hBars(rows: { label: string; value: number; color: [number, number, number] }[]): this {
+    const d = this.doc
+    const rowH = 9
+    const labelW = 52
+    const valW = 30
+    const barMax = CONTENT_W - labelW - valW - 4
+    if (this.y + rows.length * rowH + 4 > BOTTOM) {
+      d.addPage()
+      this.y = MARGIN
+    }
+    const max = Math.max(1, ...rows.map((r) => r.value))
+    rows.forEach((r) => {
+      if (this.y + rowH > BOTTOM) {
+        d.addPage()
+        this.y = MARGIN
+      }
+      d.setFont('helvetica', 'normal')
+      d.setFontSize(9)
+      d.setTextColor(71, 85, 105)
+      d.text(r.label, MARGIN, this.y + 4)
+      const w = Math.max(1.5, (r.value / max) * barMax)
+      d.setFillColor(...r.color)
+      d.rect(MARGIN + labelW, this.y, w, 4.5, 'F')
+      d.setFont('helvetica', 'bold')
+      d.setFontSize(9)
+      d.setTextColor(15, 23, 42)
+      d.text(fmtCompact(r.value), MARGIN + labelW + barMax + 2, this.y + 4)
+      this.y += rowH
+    })
+    this.y += 4
+    return this
+  }
+
+  /** Table with repeating header across page breaks; rows wrap cell text. */
   table(spec: PdfTableSpec): this {
     const { columns, rows, totals } = spec
     // Resolve widths: explicit mm, remainder split equally among the rest.
@@ -160,6 +306,15 @@ export class PdfWriter {
     this.doc.setLineWidth(width)
     this.doc.line(MARGIN, this.y, PAGE_W - MARGIN, this.y)
   }
+}
+
+/** Compact axis/label money format: 1,500 → 1.5K · 2,000,000 → 2M (no "UGX"). */
+function fmtCompact(v: number): string {
+  const n = Number(v || 0)
+  const trim = (x: number) => String(Number(x.toFixed(2)))
+  if (Math.abs(n) >= 1_000_000) return `${trim((Math.round(n / 100) * 100) / 1_000_000)}M`
+  if (Math.abs(n) >= 1_000) return `${trim((Math.round(n / 100) * 100) / 1_000)}K`
+  return String(n)
 }
 
 function slug(s: string): string {

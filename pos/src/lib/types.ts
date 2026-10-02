@@ -41,7 +41,7 @@ export interface CartItem {
   unit_cost: number
   qty: number
   stock_qty: number // snapshot at add time (may be stale offline)
-  unit_price_override?: number
+  priceOverride: number | null // per-line edited checkout price (≥ list price), null = list
 }
 
 export interface CartCustomer {
