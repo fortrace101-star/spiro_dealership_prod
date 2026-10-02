@@ -1,7 +1,7 @@
 import type {
   ActivationCode, Approval, AuditEntry, Bike, BikeReservation, CreditLedgerSale, Customer, CustomerBikeLink, InstallmentPayment,
   Product, PurchasingListItem, PurchasingRecord, RangeReport,
-  Sale, SaleItem, StockMovement, TodayReport, HourlyPoint, User, VinLookupResult,
+  Sale, SaleItem, ServiceJobCard, StockMovement, TodayReport, HourlyPoint, User, VinLookupResult,
 } from './types'
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:4000').replace(/\/+$/, '')
@@ -262,6 +262,16 @@ export const api = {
   approveFinalizeCredit: (saleId: string) =>
     request<{ ok: boolean; approved: boolean; duplicate: boolean }>(`/api/admin/credit-sales/${saleId}/approve-finalize`, { method: 'POST', body: JSON.stringify({}) }),
   audit: () => request<{ entries: AuditEntry[] }>('/api/admin/audit'),
+
+  // service jobs / workshop dispatch
+  jobs: () => request<{ jobs: ServiceJobCard[] }>('/api/admin/jobs'),
+  createJob: (input: Partial<ServiceJobCard>) =>
+    request<{ job: ServiceJobCard }>('/api/admin/jobs', { method: 'POST', body: JSON.stringify(input) }),
+  assignJob: (jobId: string, employeeId: string | null) =>
+    request<{ ok: boolean; job: ServiceJobCard }>(`/api/admin/jobs/${jobId}/assign`, {
+      method: 'POST',
+      body: JSON.stringify({ employee_id: employeeId }),
+    }),
 
   // push
   vapidPublicKey: () => request<{ publicKey: string }>('/api/push/vapid-public-key'),

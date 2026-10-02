@@ -14,6 +14,7 @@ import ReordersPage from './pages/ReordersPage'
 import BikesPage from './pages/BikesPage'
 import CustomersPage from './pages/CustomersPage'
 import TeamPage from './pages/TeamPage'
+import JobsPage from './pages/JobsPage'
 import ApprovalsPage from './pages/ApprovalsPage'
 import AuditPage from './pages/AuditPage'
 import SettingsPage from './pages/SettingsPage'
@@ -93,6 +94,7 @@ export default function App() {
           <Route path="bikes" element={<BikesPage />} />
           <Route path="customers" element={<CustomersPage />} />
           <Route path="team" element={<TeamPage />} />
+           <Route path="jobs" element={<JobsPage />} />
           <Route path="approvals" element={<ApprovalsPage />} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="settings" element={<SettingsPage />} />

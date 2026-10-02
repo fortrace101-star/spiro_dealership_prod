@@ -10,6 +10,7 @@ const ROUTE_ROLES: { path: string; roles: Role[] }[] = [
   { path: '/team', roles: ['admin'] },
   { path: '/audit', roles: ['admin'] },
   { path: '/approvals', roles: ['admin', 'manager'] },
+  { path: '/jobs', roles: ['admin', 'manager'] },
   { path: '/sales', roles: ['admin', 'manager', 'operator'] },
   { path: '/credit', roles: ['admin', 'manager'] },
   { path: '/inventory', roles: ['admin', 'manager'] },

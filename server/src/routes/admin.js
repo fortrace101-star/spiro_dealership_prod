@@ -905,4 +905,63 @@ router.post('/push/test', requireRole(), async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---- Service jobs / workshop dispatch ----
+// A manager dispatches job cards to registered employees (mechanics/operators).
+// The admin "Service Jobs" page + Assign-to-Job modal call these endpoints.
+router.get('/jobs', requireRole('manager'), async (req, res) => {
+  try {
+    const jobs = await many(`SELECT j.id, j.bike_id, j.customer_id, j.mileage_km, j.issue,
+      j.status, j.assigned_to, j.assigned_to_name, j.priority, j.created_by,
+      j.created_at, j.started_at, j.completed_at, j.total_parts_cost, j.total_labour_cost, j.total_cost
+      FROM service_job_cards j ORDER BY j.created_at DESC`)
+    res.json({ jobs })
+  } catch (err) {
+    console.error('[admin/jobs]', err)
+    res.status(500).json({ error: 'Failed to load service jobs' })
+  }
+})
+
+router.post('/jobs', requireRole('manager'), async (req, res) => {
+  try {
+    const { bike_id, customer_id, mileage_km = 0, issue, priority = 'normal' } = req.body || {}
+    if (!issue || !String(issue).trim()) {
+      return res.status(400).json({ error: 'issue is required' })
+    }
+    const validPriority = ['low', 'normal', 'high', 'urgent']
+    const pr = validPriority.includes(priority) ? priority : 'normal'
+    const job = await one(`INSERT INTO service_job_cards
+      (bike_id, customer_id, mileage_km, issue, status, assigned_to, assigned_to_name, priority, created_by, created_at)
+      VALUES ($1, $2, $3, $4, 'pending', NULL, NULL, $5, $6, now())
+      RETURNING *`,
+      [bike_id || null, customer_id || null, Number(mileage_km) || 0, String(issue).trim(), pr, req.user.id])
+    res.status(201).json({ job })
+  } catch (err) {
+    console.error('[admin/jobs create]', err)
+    res.status(err.status || 500).json({ error: err.message || 'Failed to create job' })
+  }
+})
+
+router.post('/jobs/:id/assign', requireRole('manager'), async (req, res) => {
+  try {
+    const { id } = req.params
+    const { employee_id } = req.body || {}
+    const existing = await one(`SELECT id FROM service_job_cards WHERE id = $1`, [id])
+    if (!existing) return res.status(404).json({ error: 'Job not found' })
+    let name = null
+    if (employee_id) {
+      const emp = await one(`SELECT id, full_name, is_active FROM users WHERE id = $1`, [employee_id])
+      if (!emp) return res.status(404).json({ error: 'Employee not found' })
+      if (!emp.is_active) return res.status(400).json({ error: 'Employee is not active' })
+      name = emp.full_name
+    }
+    const updated = await one(`UPDATE service_job_cards SET assigned_to = $1, assigned_to_name = $2,
+      status = CASE WHEN $1 IS NOT NULL AND status = 'pending' THEN 'in_progress' ELSE status END
+      WHERE id = $3 RETURNING *`, [employee_id || null, name, id])
+    res.json({ ok: true, job: updated })
+  } catch (err) {
+    console.error('[admin/jobs assign]', err)
+    res.status(err.status || 500).json({ error: err.message || 'Failed to assign job' })
+  }
+})
+
 module.exports = router;

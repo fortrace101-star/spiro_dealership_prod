@@ -483,3 +483,34 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(user_id);
+
+-- ============================================================
+-- SERVICE JOBS / WORKSHOP DISPATCH
+-- Job cards for the workshop. A manager assigns a job card to a
+-- registered employee (mechanic/operator) to perform the work. The admin
+-- "Service Jobs" dispatch page and its Assign-to-Job modal wire to the
+-- /api/admin/jobs routes. FK targets (users, bikes, customers) are all
+-- created earlier in this file, so this table is safe to append here.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS service_job_cards (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    bike_id UUID REFERENCES bikes(id) ON DELETE SET NULL,
+    customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
+    mileage_km INTEGER NOT NULL DEFAULT 0,
+    issue TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'cancelled')),
+    assigned_to UUID REFERENCES users(id) ON DELETE SET NULL,
+    assigned_to_name TEXT,
+    priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+    created_by UUID NOT NULL REFERENCES users(id),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    notes TEXT,
+    total_parts_cost NUMERIC(12,2) NOT NULL DEFAULT 0,
+    total_labour_cost NUMERIC(12,2) NOT NULL DEFAULT 0,
+    total_cost NUMERIC(12,2) NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_service_jobs_status ON service_job_cards(status);
+CREATE INDEX IF NOT EXISTS idx_service_jobs_assigned_to ON service_job_cards(assigned_to);
+CREATE INDEX IF NOT EXISTS idx_service_jobs_created_at ON service_job_cards(created_at DESC);

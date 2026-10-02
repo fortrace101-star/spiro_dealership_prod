@@ -1,10 +1,13 @@
  import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import { dateTime, timeAgo } from '../lib/format'
+import { dateTime, timeAgo, ugx } from '../lib/format'
+import { PERIODS } from '../lib/periods'
+import type { Period } from '../lib/periods'
 import type { ActivationCode, PosPermission, User } from '../lib/types'
 import { Badge, EmptyState, PageHeader, Spinner } from '../components/ui'
 import { cn } from '../lib/cn'
 import { Field, Modal } from './InventoryPage'
+import { PeriodPicker } from '../components/PeriodPicker'
 
 /**
  * Grantable POS capabilities, grouped like the server catalog
@@ -78,6 +81,8 @@ export default function TeamPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [permBusyId, setPermBusyId] = useState<string | null>(null)
   const [staffDetail, setStaffDetail] = useState<User | null>(null)
+  const [period, setPeriod] = useState<Period>(PERIODS[0])
+  const [cashiers, setCashiers] = useState<{ id: string; full_name: string; sales_count: number; revenue: number; profit: number; discounts: number }[] | null>(null)
 
   const load = useCallback(async () => {
     const [u, c] = await Promise.all([api.staff(), api.codes()])
@@ -85,12 +90,23 @@ export default function TeamPage() {
     setCodes(c.codes)
   }, [])
 
+  const loadCashiers = useCallback(async () => {
+    const win = period.from && period.to ? { from: period.from, to: period.to } : undefined
+    const dayCount = period.days ?? 30
+    const c = await api.cashiers(dayCount, win)
+    setCashiers(c.cashiers.map((x) => ({ ...x, revenue: Number(x.revenue), profit: Number(x.profit), discounts: Number(x.discounts) })))
+  }, [period])
+
   useEffect(() => {
     load().catch(() => {
       setUsers([])
       setCodes([])
     })
   }, [load])
+
+  useEffect(() => {
+    loadCashiers().catch(() => setCashiers([]))
+  }, [loadCashiers])
 
   async function createCode(e: React.FormEvent) {
     e.preventDefault()
@@ -316,6 +332,46 @@ export default function TeamPage() {
           )}
         </div>
       </div>
+
+      {/* Staff performance — relocated from Settings; period-filtered */}
+      <section className="card p-5 mt-4">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold text-white">Staff performance</h3>
+          <div className="w-52">
+            <PeriodPicker period={period} onChange={setPeriod} variant="select" />
+          </div>
+        </div>
+        {cashiers === null ? (
+          <Spinner />
+        ) : cashiers.length === 0 ? (
+          <EmptyState message="No sales for this period." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr>
+                  <th className="th">Name</th>
+                  <th className="th text-right">Sales</th>
+                  <th className="th text-right">Revenue</th>
+                  <th className="th text-right">Profit</th>
+                  <th className="th text-right">Discounts given</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cashiers.map((c) => (
+                  <tr key={c.id}>
+                    <td className="td font-medium text-white">{c.full_name}</td>
+                    <td className="td text-right">{c.sales_count}</td>
+                    <td className="td text-right">{ugx(c.revenue)}</td>
+                    <td className="td text-right text-brand-300">{ugx(c.profit)}</td>
+                    <td className="td text-right text-amber-300">{ugx(c.discounts)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       {showForm && (
         <Modal title="Generate activation code" onClose={() => setShowForm(false)}>

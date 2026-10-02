@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/database'
 import { createSale, getTodaySales } from '../db/repos'
@@ -63,6 +63,7 @@ export default function POSScreen() {
   const [showReservations, setShowReservations] = useState(false)
   const [reserveBike, setReserveBike] = useState<Bike | null>(null)
   const [showAccount, setShowAccount] = useState(false)
+  const [editingPrice, setEditingPrice] = useState<{ key: string; temp: string } | null>(null)
   const [canReceive, setCanReceive] = useState(false)
   const [canEditProducts, setCanEditProducts] = useState(false)
   const [canAdjustInventory, setCanAdjustInventory] = useState(false)
@@ -336,7 +337,8 @@ export default function POSScreen() {
     setNotifLoading(true)
     try {
       const r = await api.notifications()
-      setNotifs(r.notifications)
+      // Read notifications are dropped from the list — only unread ones are shown.
+      setNotifs(r.notifications.filter((x) => !x.read_at))
       setNotifUnread(r.unread_count)
     } catch {
       /* offline — keep what we had */
@@ -345,24 +347,39 @@ export default function POSScreen() {
   }
 
   async function clickNotif(n: AppNotification) {
-    if (!n.read_at) {
-      setNotifs((prev) => prev.map((x) => (x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x)))
-      setNotifUnread((c) => Math.max(0, c - 1))
-      try { await api.markNotificationRead(n.id) } catch { /* next poll reconciles */ }
-    }
+    // Read notifications are removed from the list, not dimmed: acknowledging a
+    // notification pops it out of the inbox view entirely.
+    setNotifs((prev) => prev.filter((x) => x.id !== n.id))
+    setNotifUnread((c) => Math.max(0, c - 1))
     setShowNotifs(false)
     // Single-screen app: no deep-linking — just acknowledge the headline.
     setFlash(n.title)
+    try { await api.markNotificationRead(n.id) } catch { /* next poll reconciles */ }
   }
 
   async function readAllNotifs() {
-    const now = new Date().toISOString()
-    setNotifs((prev) => prev.map((x) => (x.read_at ? x : { ...x, read_at: now })))
+    // Mark everything read on the server, then drop all notifications from the
+    // list — only unread notifications are kept on display.
+    setNotifs([])
     setNotifUnread(0)
     try { await api.markAllNotificationsRead() } catch { /* non-fatal */ }
   }
 
   const totals = cartTotals(cart.items)
+
+  /**
+   * Commit an inline price override for one cart line.
+   *
+   * Upward only: a figure at or below the catalogue price is refused, so the
+   * terminal can never undersell an item. `cart.setPrice` stores the override
+   * on the line and checkout sends that effective price to the server.
+   */
+  function commitPrice(key: string, catalogPrice: number) {
+    const next = Number(editingPrice?.temp ?? '')
+    if (!Number.isFinite(next) || next <= catalogPrice) return
+    cart.setPrice(key, next)
+    setEditingPrice(null)
+  }
 
   // Discounts are admin-only, so the checkout payload never carries one.
   // Stock-in / reservations below are gated on the capability set the server
@@ -382,9 +399,9 @@ export default function POSScreen() {
         name: i.name,
         kind: i.kind,
         qty: i.qty,
-        unit_price: i.unit_price,
+        unit_price: i.unit_price_override ?? i.unit_price,
         unit_cost: i.unit_cost,
-        line_total: i.unit_price * i.qty,
+        line_total: (i.unit_price_override ?? i.unit_price) * i.qty,
       })),
     })
 
@@ -491,7 +508,7 @@ export default function POSScreen() {
                   {notifLoading ? (
                     <p className="text-xs text-slate-500 px-2 py-3">Loading…</p>
                   ) : notifs.length === 0 ? (
-                    <p className="text-xs text-slate-500 px-2 py-3">Nothing yet — credit decisions, release outcomes and permission grants land here.</p>
+                    null
                   ) : (
                     <div className="space-y-1">
                       {notifs.map((n) => (
@@ -499,7 +516,7 @@ export default function POSScreen() {
                           key={n.id}
                           type="button"
                           onClick={() => void clickNotif(n)}
-                          className={cn('w-full text-left rounded-lg px-2.5 py-2 transition', n.read_at ? 'opacity-60' : 'bg-brand-500/10 hover:bg-brand-500/20')}
+                          className={cn('w-full text-left rounded-lg px-2.5 py-2 transition bg-brand-500/10 hover:bg-brand-500/20')}
                         >
                           <div className="flex items-start gap-2">
                             {!n.read_at && <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-400" />}
@@ -749,7 +766,55 @@ export default function POSScreen() {
                       >+</button>
                     </div>
                   )}
-                  <span className="text-sm font-bold text-brand-300">{ugx(i.unit_price * i.qty)}</span>
+                  {(editingPrice?.key === i.key) ? (
+                      <div className="flex flex-col items-end gap-1">
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            className={cn(
+                              'w-32 rounded-md border bg-slate-900 px-2 py-1 text-right text-sm font-bold tabular-nums text-white outline-none',
+                              Number(editingPrice!.temp) > i.unit_price
+                                ? 'border-sky-500/60 focus:border-sky-400'
+                                : 'border-red-500/70',
+                            )}
+                            value={editingPrice!.temp}
+                            onChange={(e) => setEditingPrice({ ...editingPrice!, temp: e.target.value })}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') { e.preventDefault(); commitPrice(i.key, i.unit_price) }
+                              if (e.key === 'Escape') setEditingPrice(null)
+                            }}
+                            autoFocus
+                          />
+                          <button
+                            className="text-green-400 hover:text-green-300 text-base leading-none shrink-0 disabled:opacity-40"
+                            disabled={Number.isNaN(Number(editingPrice!.temp)) || Number(editingPrice!.temp) <= i.unit_price}
+                            onClick={() => commitPrice(i.key, i.unit_price)}
+                            title={`Save new price (minimum ${ugx(i.unit_price)})`}
+                          >✓</button>
+                          <button
+                            className="text-red-400 hover:text-red-300 text-base leading-none shrink-0"
+                            onClick={() => setEditingPrice(null)}
+                            title="Cancel"
+                          >✕</button>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                          <span className="line-through">{ugx((i.unit_price_override ?? i.unit_price) * i.qty)}</span>
+                          <span>min {ugx(i.unit_price)} per unit — prices only go up</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="text-[11px] font-semibold text-sky-400 hover:text-sky-300 underline underline-offset-2 shrink-0"
+                          onClick={() => setEditingPrice({ key: i.key, temp: String(i.unit_price_override ?? i.unit_price + 1) })}
+                          title={`Edit selling price · minimum ${ugx(i.unit_price)}`}
+                        >Edit</button>
+                        <span className="text-sm font-bold text-brand-300 tabular-nums">{ugx((i.unit_price_override ?? i.unit_price) * i.qty)}</span>
+                        {i.unit_price_override != null && (
+                          <span className="text-[10px] text-sky-400 shrink-0">(override)</span>
+                        )}
+                      </div>
+                    )}
                 </div>
               </div>
             ))}

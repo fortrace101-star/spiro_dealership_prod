@@ -6,10 +6,13 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { compactUgx, dateTime, num, PAYMENT_LABELS, timeAgo, ugx } from '../lib/format'
-import type { Approval, HourlyPoint, Product, ReservationToday, Sale, TodayReport } from '../lib/types'
+import { PERIODS } from '../lib/periods'
+import type { Period } from '../lib/periods'
+import type { Approval, HourlyPoint, Product, RangeReport, ReservationToday, Sale, TodayReport } from '../lib/types'
 import { cn } from '../lib/cn'
 import { Badge, EmptyState, KpiCard, PageHeader, Spinner } from '../components/ui'
 import { Modal } from '../components/Modal'
+import { PeriodPicker } from '../components/PeriodPicker'
 
 const PIE_COLORS = ['#12b76a', '#0ea5e9', '#8b5cf6', '#f59e0b', '#ef4444']
 
@@ -28,23 +31,42 @@ export default function OverviewPage() {
   const [low, setLow] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
   const [detail, setDetail] = useState<CardDetail | null>(null)
+  const [period, setPeriod] = useState<Period>(PERIODS[0])
+  const [range, setRange] = useState<RangeReport | null>(null)
 
   const load = useCallback(async () => {
     try {
-      const [t, h, tp, ls] = await Promise.all([
-        api.today(),
-        api.hourly(),
-        api.topProducts(30, 'revenue'),
-        api.lowStock(),
-      ])
-      setToday(t)
-      setHourly(h.series)
-      setTop(tp.products.slice(0, 7).map((p) => ({ ...p, revenue: Number(p.revenue), profit: Number(p.profit) })))
-      setLow(ls.products.slice(0, 6))
+      if (period.id === 'today') {
+        const [t, h, tp, ls] = await Promise.all([
+          api.today(),
+          api.hourly(),
+          api.topProducts(30, 'revenue'),
+          api.lowStock(),
+        ])
+        setToday(t)
+        setHourly(h.series)
+        setRange(null)
+        setTop(tp.products.slice(0, 7).map((p) => ({ ...p, revenue: Number(p.revenue), profit: Number(p.profit) })))
+        setLow(ls.products.slice(0, 6))
+      } else {
+        const win = period.from && period.to ? { from: period.from, to: period.to } : undefined
+        const dayCount = period.days ?? 30
+        const [t, tp, ls, rng] = await Promise.all([
+          api.today(),
+          api.topProducts(30, 'revenue'),
+          api.lowStock(),
+          api.range(dayCount, win),
+        ])
+        setToday(t)
+        setHourly([])
+        setRange(rng)
+        setTop(tp.products.slice(0, 7).map((p) => ({ ...p, revenue: Number(p.revenue), profit: Number(p.profit) })))
+        setLow(ls.products.slice(0, 6))
+      }
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [period])
 
   useEffect(() => {
     load()
@@ -115,43 +137,60 @@ export default function OverviewPage() {
   const openCreditPending = () => navigate('/credit?view=pending')
 
   if (loading) return <Spinner />
-  if (!today) return <EmptyState message="Could not load today's report." />
+  if (!today && !range) return <EmptyState message="Could not load report." />
 
-  const t = today.today
-  const donut = today.payments.map((p) => ({ name: PAYMENT_LABELS[p.payment_method] || p.payment_method, value: Number(p.amount) }))
-  const partsRev = Number(today.items.find((i) => i.kind === 'part')?.amount || 0)
-  const bikesRev = Number(today.items.find((i) => i.kind === 'bike')?.amount || 0)
-  const margin = t.revenue ? ((t.profit / t.revenue) * 100).toFixed(1) : '0.0'
+  const t = today?.today
+  const res = today?.reservations
+  const donut = today?.payments.map((p) => ({ name: PAYMENT_LABELS[p.payment_method] || p.payment_method, value: Number(p.amount) })) ?? []
+  const partsRev = Number(today?.items.find((i) => i.kind === 'part')?.amount || 0)
+  const bikesRev = Number(today?.items.find((i) => i.kind === 'bike')?.amount || 0)
+  const margin = t && t.revenue ? ((t.profit / t.revenue) * 100).toFixed(1) : '0.0'
 
   return (
     <div>
       <PageHeader
-        title="Today's Performance"
-        subtitle={new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+        title={period.id === 'today' ? "Today's Performance" : 'Performance'}
+        subtitle={period.id === 'today' ? new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : period.label}
       />
 
-      {/* KPI row — 2×2 at every breakpoint */}
+      {/* Period filter — drives the KPI grid and graph below (moved here from Settings) */}
+      <div className="card p-3 mb-4">
+        <PeriodPicker period={period} onChange={setPeriod} variant="select" />
+      </div>
+
+      {/* KPI row — 2×2 at every breakpoint, period-aligned */}
       <div className="grid grid-cols-2 gap-4">
-        <KpiCard
-          label="Revenue"
-          value={ugx(t.revenue)}
-          accent
-          delta={`${t.sales_count} transactions`}
-          onClick={openRevenue}
-        />
-        <KpiCard label="Gross Profit" value={ugx(t.profit)} delta={`Margin ${margin}%`} onClick={openProfit} />
-        <KpiCard
-          label="Bikes Sold"
-          value={num(t.bikes_sold)}
-          delta={`${ugx(bikesRev)} bikes · ${ugx(partsRev)} parts`}
-          onClick={openBikes}
-        />
-        <KpiCard
-          label="Bike Reservations"
-          value={ugx(today.reservations.collected_today)}
-          delta={`${today.reservations.new_count} new · ${today.reservations.payments_count} payment${today.reservations.payments_count === 1 ? '' : 's'}${today.reservations.completed_count ? ` · ${today.reservations.completed_count} completed` : ''}`}
-          onClick={openReservations}
-        />
+        {period.id === 'today' ? (
+          <>
+            <KpiCard
+              label="Revenue"
+              value={ugx(t?.revenue ?? 0)}
+              accent
+              delta={`${t?.sales_count ?? 0} transactions`}
+              onClick={openRevenue}
+            />
+            <KpiCard label="Gross Profit" value={ugx(t?.profit ?? 0)} delta={`Margin ${margin}%`} onClick={openProfit} />
+            <KpiCard
+              label="Bikes Sold"
+              value={num(t?.bikes_sold ?? 0)}
+              delta={`${ugx(bikesRev)} bikes · ${ugx(partsRev)} parts`}
+              onClick={openBikes}
+            />
+            <KpiCard
+              label="Bike Reservations"
+              value={ugx(res?.collected_today ?? 0)}
+              delta={res ? `${res.new_count} new · ${res.payments_count} payment${res.payments_count === 1 ? '' : 's'}${res.completed_count ? ` · ${res.completed_count} completed` : ''}` : ''}
+              onClick={openReservations}
+            />
+          </>
+        ) : range ? (
+          <>
+            <KpiCard label="Revenue" value={ugx(range.kpi.revenue)} accent delta={`${range.kpi.sales_count} transactions · ${period.label}`} />
+            <KpiCard label="Gross profit" value={ugx(range.kpi.profit)} delta={`Avg ${ugx(range.kpi.avg_transaction)}`} />
+            <KpiCard label="Bikes sold" value={String(range.kpi.bikes_sold)} delta={`${range.kpi.parts_sold} parts sold`} />
+            <KpiCard label="Stock value" value={ugx(range.kpi.stock_value)} delta={`Credit out ${ugx(range.kpi.credit_outstanding)}`} />
+          </>
+        ) : null}
       </div>
 
       {/* Chart + donut */}
@@ -166,7 +205,7 @@ export default function OverviewPage() {
           </div>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={hourly.map((h) => ({ ...h, label: `${String(h.hour).padStart(2, '0')}:00` }))}>
+              <AreaChart data={period.id === 'today' ? hourly.map((h) => ({ ...h, label: `${String(h.hour).padStart(2, '0')}:00` })) : (range?.daily ?? []).map((d) => ({ ...d, revenue: Number(d.revenue), profit: Number(d.profit), label: new Date(d.day).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) }))}>
                 <defs>
                   <linearGradient id="rev" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#12b76a" stopOpacity={0.4} />
@@ -226,14 +265,16 @@ export default function OverviewPage() {
         </div>
       </div>
 
-      {/* Alerts strip — 2×2 at every breakpoint */}
-      <div className="grid grid-cols-2 gap-4 mt-4">
-        <AlertCard label="Low stock alerts" value={t.low_stock_count} tone="amber" onClick={openLowStock} />
-        <AlertCard label="Pending approvals" value={t.pending_approvals} tone="sky" onClick={openApprovals} />
-        <AlertCard label="Awaiting sync (POS)" value={t.pending_sync} tone="violet" onClick={openSync} />
-        <AlertCard label="Credit outstanding" value={ugx(t.credit_outstanding)} tone="red" isText onClick={openCredit} />
-        <AlertCard label="Awaiting credit approval" value={t.credit_pending} tone="amber" onClick={openCreditPending} />
-      </div>
+      {/* Alerts strip — today's operational alerts only */}
+      {period.id === 'today' && (
+        <div className="grid grid-cols-2 gap-4 mt-4">
+          <AlertCard label="Low stock alerts" value={t?.low_stock_count ?? 0} tone="amber" onClick={openLowStock} />
+          <AlertCard label="Pending approvals" value={t?.pending_approvals ?? 0} tone="sky" onClick={openApprovals} />
+          <AlertCard label="Awaiting sync (POS)" value={t?.pending_sync ?? 0} tone="violet" onClick={openSync} />
+          <AlertCard label="Credit outstanding" value={ugx(t?.credit_outstanding ?? 0)} tone="red" isText onClick={openCredit} />
+          <AlertCard label="Awaiting credit approval" value={t?.credit_pending ?? 0} tone="amber" onClick={openCreditPending} />
+        </div>
+      )}
 
       {/* Top products + low stock */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">

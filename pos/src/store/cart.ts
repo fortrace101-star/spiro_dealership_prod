@@ -10,6 +10,7 @@ interface CartState {
 
   addItem: (item: Omit<CartItem, 'key' | 'qty'>, qty?: number) => void
   setQty: (key: string, qty: number) => void
+  setPrice: (key: string, price: number) => void
   removeItem: (key: string) => void
   clearCart: () => void
   setCustomer: (c: CartCustomer | null) => void
@@ -50,6 +51,11 @@ export const useCart = create<CartState>((set) => ({
           : state.items.map((i) => (i.key === key ? { ...i, qty } : i)),
     })),
 
+  setPrice: (key, price) =>
+    set((state) => ({
+      items: state.items.map((i) => (i.key === key ? { ...i, unit_price_override: price } : i)),
+    })),
+
   removeItem: (key) => set((state) => ({ items: state.items.filter((i) => i.key !== key) })),
   clearCart: () => set({ items: [], amountPaid: '', customer: null, lastReceipt: null }),
   setCustomer: (customer) => set({ customer }),
@@ -61,9 +67,10 @@ export const useCart = create<CartState>((set) => ({
 /**
  * Cart totals. There is no discount parameter on purpose: discounts are issued
  * and approved by the administrator only, so the POS always prices at full
- * value (any discount payload is refused server-side).
+ * value (any discount payload is refused server-side). Price overrides are
+ * respected when present on a line item.
  */
 export function cartTotals(items: CartItem[]) {
-  const subtotal = items.reduce((s, i) => s + i.unit_price * i.qty, 0)
+  const subtotal = items.reduce((s, i) => s + (i.unit_price_override ?? i.unit_price) * i.qty, 0)
   return { subtotal, total: subtotal }
 }
