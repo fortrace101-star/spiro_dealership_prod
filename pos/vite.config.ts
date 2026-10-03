@@ -7,7 +7,10 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['logo.png', 'favicon.png'],
+      // Serve the manifest + dev service worker on `npm run dev` too, so the
+      // Chrome install prompt (Install App chip) appears in development.
+      devOptions: { enabled: true },
+      includeAssets: ['logo.png'],
       manifest: {
         name: 'Spiro POS',
         short_name: 'Spiro POS',

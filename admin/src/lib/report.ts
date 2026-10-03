@@ -70,7 +70,7 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
   const installmentRows = reservationInfo?.payments ?? []
 
   const writer = new PdfWriter(`Spiro Performance Report`)
-    writer.cover(
+  writer.header(
     [
       `${period.label} · ${from === to ? fmtDate(from) : `${fmtDate(from)} → ${fmtDate(to)}`}`,
       `Generated ${new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`,
