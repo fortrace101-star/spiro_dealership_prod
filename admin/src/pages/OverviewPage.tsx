@@ -9,6 +9,7 @@ import { compactUgx, dateTime, num, PAYMENT_LABELS, timeAgo, ugx } from '../lib/
 import { PERIODS } from '../lib/periods'
 import type { Period } from '../lib/periods'
 import { downloadPeriodReport } from '../lib/report'
+import { showToast } from '../components/Toaster'
 import type { Approval, HourlyPoint, Product, RangeReport, ReservationToday, Sale, TodayReport } from '../lib/types'
 import { cn } from '../lib/cn'
 import { Badge, EmptyState, KpiCard, PageHeader, Spinner } from '../components/ui'
@@ -160,8 +161,10 @@ export default function OverviewPage() {
     setReportBusy(true)
     try {
       await downloadPeriodReport(period)
+      showToast('Report downloaded', `PDF report for ${period.label} saved.`)
     } catch (err) {
       console.error('Report download failed', err)
+      showToast('Report failed', 'Could not build the PDF. Check your connection and retry.')
     } finally {
       setReportBusy(false)
     }
@@ -174,10 +177,17 @@ export default function OverviewPage() {
         subtitle={period.id === 'today' ? new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : period.label}
       />
 
-      {/* Period filter (narrow) + Download Report for the selected period */}
-      <div className="card p-3 mb-4 flex items-center gap-3">
+      {/* Period filter (narrow) + Download Report for the selected period.
+          The card is `relative` so the picker's custom-range panel can anchor
+          to the card edges instead of the 220px column (see PeriodPicker). */}
+      <div className="card p-3 mb-4 flex items-center gap-3 relative">
         <div className="w-[220px] shrink-0">
-          <PeriodPicker period={period} onChange={setPeriod} variant="select" />
+          <PeriodPicker
+            period={period}
+            onChange={setPeriod}
+            variant="select"
+            panelClassName="absolute left-3 right-3 top-[calc(100%_+_8px)] z-40 bg-[#12161d] rounded-2xl p-3 shadow-2xl border border-slate-700/60"
+          />
         </div>
         <button
           className="btn-primary text-xs ml-auto shrink-0"

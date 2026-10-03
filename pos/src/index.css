@@ -52,4 +52,8 @@ button:focus {
   .btn-ghost {
     @apply btn bg-slate-800/70 text-slate-200 hover:bg-slate-700/70 border border-slate-700/60;
   }
+  /* Orange "Cancel" for live/armed modes (stock-mode toggle, modal cancel). */
+  .btn-warn {
+    @apply btn bg-orange-500/15 text-orange-300 border border-orange-500/40 hover:bg-orange-500/25;
+  }
 }

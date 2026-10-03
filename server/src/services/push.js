@@ -1,6 +1,7 @@
 const webpush = require('web-push');
 const { query, many } = require('../db');
 const { vapid } = require('../config');
+const { emit } = require('../routes/events');
 
 let configured = false;
 function ensureConfigured() {
@@ -52,6 +53,8 @@ async function persist(userIds, payload) {
     [userIds, kind, String(payload.title || 'Spiro'), String(payload.body || ''),
      payload.url || null, payload.tag || null, JSON.stringify(extra)],
   );
+  // Live badge bump (Workstream D) — open clients recount without polling.
+  for (const id of userIds) emit('notification.created', { userId: id, kind, title: payload.title || '' });
   await query(
     `DELETE FROM notifications
       WHERE (read_at IS NOT NULL AND read_at < now() - interval '30 days')

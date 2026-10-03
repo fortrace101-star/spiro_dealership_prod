@@ -86,6 +86,7 @@ export type PosPermission =
       | 'reservation_create'
   | 'reservation_complete'
   | 'reservation_release'
+  /** @deprecated folded into `inventory_adjust` — kept so legacy grants parse. */
   | 'product_edit'
   | 'inventory_adjust'
 
@@ -365,6 +366,44 @@ export interface RangeReport {
     stock_value: number
   }
   daily: { day: string; revenue: string | number; profit: string | number }[]
+}
+
+export interface PeriodReport {
+  from: string
+  to: string
+  kpi: {
+    sales_count: number
+    revenue: number
+    profit: number
+    avg_transaction: number
+    discounts: number
+    bikes_sold: number
+    parts_sold: number
+    credit_collected: number
+    credit_outstanding: number
+    stock_value: number
+  }
+  daily: { day: string; revenue: string | number; profit: string | number }[]
+  hourly: { hour: number; revenue: string | number; profit: string | number }[] | null
+  payments: { payment_method: string; amount: string | number; n?: number }[]
+  top_products: { name: string; qty: number; revenue: string | number; profit: string | number }[]
+  cashiers: { id: string; full_name: string; sales_count: number; revenue: string | number; profit: string | number; discounts: string | number }[]
+  low_stock: { id: string; sku: string; name: string; stock_qty: number; min_stock: number; reorder_level: number }[]
+  reorders: {
+    lists: { id: string; title: string; status: string; notes: string | null; created_at: string; created_by_name: string; item_count: number }[]
+    by_status: { status: string; n: number }[]
+  }
+  consignments: {
+    rows: { id: string; reference: string; supplier: string; delivery_cost: string | number; items_total: string | number; created_at: string }[]
+    totals: { count: number; items_total: number; delivery: number; landed: number }
+  }
+  reservations: {
+    count: number
+    down: number
+    installments_collected: number
+    installments_count: number
+    payments: { id: string; amount: string | number; payment_method: string; created_at: string; paid_by_name: string | null }[]
+  }
 }
 
 export interface PurchasingListItem {

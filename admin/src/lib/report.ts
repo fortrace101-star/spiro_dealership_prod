@@ -1,5 +1,5 @@
 import { api } from './api'
-import { PAYMENT_LABELS, ugx } from './format'
+import { PAYMENT_LABELS, dateOnly, ugx } from './format'
 import { PdfWriter } from './pdf'
 import { resolveRange } from './periods'
 import type { Period } from './periods'
@@ -37,20 +37,38 @@ const MIX_COLORS: [number, number, number][] = [
  */
 export async function downloadPeriodReport(period: Period): Promise<void> {
   const { from, to } = resolveRange(period)
-  const win = { from, to }
-  const dayCount = period.days ?? 30
   const isToday = period.id === 'today'
 
-  const [range, hourlyR, paymentsR, topR, cashiersR, lowR] = await Promise.all([
-    api.range(dayCount, win),
-    isToday ? api.hourly() : Promise.resolve(null),
-    api.payments(dayCount, win),
-    api.topProducts(dayCount, 'revenue', win),
-    api.cashiers(dayCount, win),
-    api.lowStock(),
-  ])
+  // One round-trip: the server aggregates every section for the exact window
+  // (Workstream I) so the PDF can never disagree with the selected period.
+  const pr = await api.periodReport(from, to)
+  const kpi = pr.kpi
+  const daily = pr.daily ?? []
+  const hourly = pr.hourly
+    ? pr.hourly.map((h) => ({ hour: Number(h.hour), revenue: Number(h.revenue), profit: Number(h.profit) }))
+    : null
+  const payments = pr.payments.map((p) => ({ payment_method: p.payment_method, amount: Number(p.amount) }))
+  const top = pr.top_products.map((p) => ({
+    name: p.name,
+    qty: Number(p.qty),
+    revenue: Number(p.revenue),
+    profit: Number(p.profit),
+  }))
+  const cashiers = pr.cashiers.map((c) => ({
+    full_name: c.full_name,
+    sales_count: Number(c.sales_count),
+    revenue: Number(c.revenue),
+    profit: Number(c.profit),
+    discounts: Number(c.discounts),
+  }))
+  const low = pr.low_stock ?? []
+  const reorderLists = pr.reorders?.lists ?? []
+  const reorderCounts = pr.reorders?.by_status ?? []
+  const consignmentRows = pr.consignments?.rows ?? []
+  const consignmentTotals = pr.consignments?.totals
+  const reservationInfo = pr.reservations
+  const installmentRows = reservationInfo?.payments ?? []
 
-  const kpi = range.kpi
   const writer = new PdfWriter(`Spiro Performance Report`)
   writer.heading(
     [
@@ -66,59 +84,62 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
     { label: 'Gross profit', value: `${ugx(kpi.profit)} (${kpi.revenue ? ((kpi.profit / kpi.revenue) * 100).toFixed(1) : '0.0'}%)` },
     { label: 'Transactions', value: String(kpi.sales_count) },
     { label: 'Average transaction', value: ugx(kpi.avg_transaction) },
+    { label: 'Discounts given', value: ugx(kpi.discounts) },
     { label: 'Bikes sold', value: String(kpi.bikes_sold) },
     { label: 'Parts sold', value: String(kpi.parts_sold) },
-    { label: 'Stock value', value: ugx(kpi.stock_value) },
+    { label: 'Credit collected (period)', value: ugx(kpi.credit_collected) },
     { label: 'Credit outstanding', value: ugx(kpi.credit_outstanding) },
+    { label: 'Reservations collected', value: ugx(Number(pr.reservations.installments_collected) + Number(pr.reservations.down)) },
+    { label: 'Stock value', value: ugx(kpi.stock_value) },
   ])
 
   // ---- Graph: revenue & profit over the period ----
-  if (isToday && hourlyR) {
+  if (isToday && hourly) {
     writer.sectionTitle('Revenue & profit (hourly)')
     writer.barChart({
-      labels: hourlyR.series.map((h) => `${String(h.hour).padStart(2, '0')}:00`),
-      values: hourlyR.series.map((h) => h.revenue),
-      values2: hourlyR.series.map((h) => h.profit),
+      labels: hourly.map((h) => `${String(h.hour).padStart(2, '0')}:00`),
+      values: hourly.map((h) => h.revenue),
+      values2: hourly.map((h) => h.profit),
       legend: ['Revenue', 'Profit'],
       height: 56,
     })
-  } else if (range.daily.length > 0) {
+  } else if (daily.length > 0) {
     writer.sectionTitle('Revenue & profit (daily)')
     writer.barChart({
-      labels: range.daily.map((d) =>
+      labels: daily.map((d) =>
         new Date(d.day).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
       ),
-      values: range.daily.map((d) => Number(d.revenue)),
-      values2: range.daily.map((d) => Number(d.profit)),
+      values: daily.map((d) => Number(d.revenue)),
+      values2: daily.map((d) => Number(d.profit)),
       legend: ['Revenue', 'Profit'],
       height: 56,
     })
   }
   // ---- Graph + table: payment mix ----
-  const payments = paymentsR.payments.map((p) => ({
+  const payRows = payments.map((p) => ({
     label: PAYMENT_LABELS[p.payment_method] || p.payment_method,
     value: Number(p.amount),
   }))
   writer.sectionTitle('Payment mix')
-  if (payments.length === 0) {
+  if (payRows.length === 0) {
     writer.keyValues([{ label: 'No payments recorded in this period', value: '' }])
   } else {
-    writer.hBars(payments.map((p, i) => ({ ...p, color: MIX_COLORS[i % MIX_COLORS.length] })))
-    const total = payments.reduce((s, p) => s + p.value, 0)
+    writer.hBars(payRows.map((p, i) => ({ ...p, color: MIX_COLORS[i % MIX_COLORS.length] })))
+    const total = payRows.reduce((s, p) => s + p.value, 0)
     writer.table({
       columns: [
         { label: 'Method', width: 70 },
         { label: 'Amount', align: 'right' },
         { label: 'Share', align: 'right' },
       ],
-      rows: payments.map((p) => [p.label, ugx(p.value), total ? `${((p.value / total) * 100).toFixed(1)}%` : '0.0%']),
+      rows: payRows.map((p) => [p.label, ugx(p.value), total ? `${((p.value / total) * 100).toFixed(1)}%` : '0.0%']),
       totals: [['Total', ugx(total), '100.0%']],
     })
   }
 
   // ---- Table: top products ----
   writer.sectionTitle(`Top products · ${period.label}`)
-  if (topR.products.length === 0) {
+  if (top.length === 0) {
     writer.keyValues([{ label: 'No sales in this period', value: '' }])
   } else {
     writer.table({
@@ -128,13 +149,14 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
         { label: 'Revenue', align: 'right', width: 38 },
         { label: 'Profit', align: 'right', width: 38 },
       ],
-      rows: topR.products.map((p) => [p.name, String(p.qty), ugx(p.revenue), ugx(p.profit)]),
+      rows: top.map((p) => [p.name, String(p.qty), ugx(p.revenue), ugx(p.profit)]),
     })
   }
 
   // ---- Table: staff performance ----
   writer.sectionTitle('Staff performance')
-  if (cashiersR.cashiers.length === 0) {
+  const activeCashiers = cashiers.filter((c) => c.sales_count > 0)
+  if (activeCashiers.length === 0) {
     writer.keyValues([{ label: 'No sales for this period', value: '' }])
   } else {
     writer.table({
@@ -145,7 +167,7 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
         { label: 'Profit', align: 'right', width: 38 },
         { label: 'Discounts', align: 'right', width: 32 },
       ],
-      rows: cashiersR.cashiers.map((c) => [
+      rows: activeCashiers.map((c) => [
         c.full_name,
         String(c.sales_count),
         ugx(c.revenue),
@@ -157,7 +179,7 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
 
   // ---- Table: reorder alerts ----
   writer.sectionTitle('Reorder alerts')
-  if (lowR.products.length === 0) {
+  if (low.length === 0) {
     writer.keyValues([{ label: 'All stock levels healthy', value: '' }])
   } else {
     writer.table({
@@ -167,8 +189,104 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
         { label: 'In stock', align: 'right', width: 26 },
         { label: 'Reorder at', align: 'right', width: 28 },
       ],
-      rows: lowR.products.map((p) => [p.name, p.sku, String(p.stock_qty), String(p.reorder_level)]),
+      rows: low.map((p) => [p.name, p.sku, String(p.stock_qty), String(p.reorder_level)]),
     })
+  }
+
+  // ---- Table: reorder lists prepared in period (incl. cancelled) ----
+  writer.sectionTitle(`Reorder lists prepared · ${period.label}`)
+  if (reorderLists.length === 0) {
+    writer.keyValues([{ label: 'No reorder lists prepared in this period', value: '' }])
+  } else {
+    if (reorderCounts.length > 0) {
+      const prepared = reorderCounts.reduce((s, r) => s + Number(r.n || 0), 0)
+      const cancelled = reorderCounts
+        .filter((r) => String(r.status).toLowerCase() === 'cancelled')
+        .reduce((s, r) => s + Number(r.n || 0), 0)
+      writer.keyValues([
+        { label: 'Lists prepared', value: String(prepared) },
+        { label: 'Cancelled', value: String(cancelled) },
+      ])
+    }
+    writer.table({
+      columns: [
+        { label: 'Title' },
+        { label: 'Status', width: 30 },
+        { label: 'Items', align: 'right', width: 20 },
+        { label: 'By', width: 44 },
+        { label: 'Date', width: 30 },
+      ],
+      rows: reorderLists.map((r) => [
+        r.title,
+        r.status,
+        String(r.item_count ?? 0),
+        r.created_by_name || '—',
+        dateOnly(r.created_at),
+      ]),
+    })
+  }
+
+  // ---- Table: stock received (consignments) in period ----
+  writer.sectionTitle(`Stock received · ${period.label}`)
+  if (consignmentRows.length === 0) {
+    writer.keyValues([{ label: 'No stock received in this period', value: '' }])
+  } else {
+    writer.table({
+      columns: [
+        { label: 'Reference' },
+        { label: 'Supplier', width: 48 },
+        { label: 'Items', align: 'right', width: 34 },
+        { label: 'Delivery', align: 'right', width: 34 },
+        { label: 'Date', width: 30 },
+      ],
+      rows: consignmentRows.map((c) => [
+        c.reference,
+        c.supplier,
+        ugx(c.items_total),
+        ugx(c.delivery_cost),
+        dateOnly(c.created_at),
+      ]),
+      totals: consignmentTotals
+        ? [[
+            `Total (${consignmentTotals.count})`,
+            '',
+            ugx(consignmentTotals.items_total),
+            ugx(consignmentTotals.delivery),
+            '',
+          ]]
+        : undefined,
+    })
+  }
+
+  // ---- Reservations & installments ----
+  writer.sectionTitle(`Reservations · ${period.label}`)
+  const hasReservations =
+    reservationInfo && (reservationInfo.count > 0 || reservationInfo.installments_count > 0)
+  if (!hasReservations || !reservationInfo) {
+    writer.keyValues([{ label: 'No reservations in this period', value: '' }])
+  } else {
+    writer.keyValues([
+      { label: 'Reservations', value: String(reservationInfo.count) },
+      { label: 'Down payments', value: ugx(reservationInfo.down) },
+      { label: 'Installments collected', value: ugx(reservationInfo.installments_collected) },
+      { label: 'Installment payments', value: String(reservationInfo.installments_count) },
+    ])
+    if (installmentRows.length > 0) {
+      writer.table({
+        columns: [
+          { label: 'Method', width: 44 },
+          { label: 'Amount', align: 'right', width: 34 },
+          { label: 'Received by', width: 52 },
+          { label: 'Date', width: 30 },
+        ],
+        rows: installmentRows.map((p) => [
+          PAYMENT_LABELS[p.payment_method] || p.payment_method,
+          ugx(p.amount),
+          p.paid_by_name || '—',
+          dateOnly(p.created_at),
+        ]),
+      })
+    }
   }
 
   writer.save(`spiro report - ${reportPeriodSuffix(period)}.pdf`)

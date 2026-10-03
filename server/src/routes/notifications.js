@@ -9,16 +9,22 @@ const COLS = 'id, kind, title, body, url, tag, payload, read_at, created_at';
 
 /**
  * Durable inbox shared by admin + POS (rows are scoped to req.user).
- * GET /             → latest 30 rows + unread count (bell badge)
- * GET /unread-count → just the badge number (cheap poll)
- * POST /read-all    → mark everything read
- * POST /:id/read    → mark one row read (idempotent)
+ * The container displays UNREAD rows only — read rows never linger on screen
+ * and are purged from the database outright (per-row on click, bulk via
+ * DELETE /), not just dimmed. `read_at` remains for compatibility with older
+ * clients that still call the POST routes.
+ * GET    /             → latest 30 unread rows + unread count (bell badge)
+ * GET    /unread-count → just the badge number (cheap poll)
+ * POST   /read-all     → mark everything read (kept for old clients)
+ * POST   /:id/read     → mark one row read (idempotent)
+ * DELETE /             → purge every row for this user ("Clear all")
+ * DELETE /:id          → purge one row (acknowledge on click)
  */
 
 router.get('/', async (req, res) => {
   try {
     const [notifications, counts] = await Promise.all([
-      many(`SELECT ${COLS} FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 30`, [req.user.id]),
+      many(`SELECT ${COLS} FROM notifications WHERE user_id = $1 AND read_at IS NULL ORDER BY created_at DESC LIMIT 30`, [req.user.id]),
       one(`SELECT count(*)::int AS unread FROM notifications WHERE user_id = $1 AND read_at IS NULL`, [req.user.id]),
     ]);
     res.json({ notifications, unread_count: counts ? counts.unread : 0 });
@@ -60,6 +66,30 @@ router.post('/:id/read', async (req, res) => {
   } catch (err) {
     console.error('[notifications/read]', err);
     res.status(500).json({ error: 'Failed to update notification' });
+  }
+});
+
+// Clear all — deletes this user's rows outright (the container is unread-only,
+// so "read" state is meaningless to keep around; this keeps the table small).
+router.delete('/', async (req, res) => {
+  try {
+    const r = await query(`DELETE FROM notifications WHERE user_id = $1`, [req.user.id]);
+    res.json({ ok: true, deleted: (r && r.rowCount) || 0 });
+  } catch (err) {
+    console.error('[notifications/clear]', err);
+    res.status(500).json({ error: 'Failed to clear notifications' });
+  }
+});
+
+// Acknowledge one notification: the row is removed from the database.
+router.delete('/:id', async (req, res) => {
+  try {
+    const r = await query(`DELETE FROM notifications WHERE id = $1 AND user_id = $2`, [req.params.id, req.user.id]);
+    if (!r || !r.rowCount) return res.status(404).json({ error: 'Notification not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[notifications/delete]', err);
+    res.status(500).json({ error: 'Failed to delete notification' });
   }
 });
 

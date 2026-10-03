@@ -1,10 +1,12 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/database'
 import { createSale, getTodaySales } from '../db/repos'
 import { api, clearSession, getDeviceId, getStoredUser, getToken, normalizeCategory, setSession, type AppNotification, type ProductCategory, type PurchasingRecord } from '../lib/api'
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner'
 import { playPushChime, usePush } from '../hooks/usePush'
+import { useEvents } from '../hooks/useEvents'
 import { useSyncStatus } from '../hooks/useSyncStatus'
 import { runSyncCycle } from '../services/sync'
 import { cartTotals, useCart } from '../store/cart'
@@ -17,7 +19,6 @@ import CreditModal, { creditBadgeCounts } from './CreditModal'
 import ReceivingScreen from './ReceivingScreen'
 import ReceiveSelectModal from './ReceiveSelectModal'
 import ReservationsModal from './ReservationsModal'
-import EditProductsModal from './EditProductsModal'
 import AdjustInventoryModal from './AdjustInventoryModal'
 import { cn } from '../lib/cn'
 
@@ -56,9 +57,10 @@ export default function POSScreen() {
   const [showCheckout, setShowCheckout] = useState(false)
   const [receipt, setReceipt] = useState<LocalSale | null>(null)
   const [showHistory, setShowHistory] = useState(false)
-  const [stockMode, setStockMode] = useState<'receive-select' | 'reorder' | 'receive' | 'edit-products' | 'adjust-inventory' | null>(null)
+  // Single stock mode: the Adjust Inventory modal also edits product details
+  // (the retired Edit Products flow merged into it).
+  const [stockMode, setStockMode] = useState<'receive-select' | 'reorder' | 'receive' | 'adjust-inventory' | null>(null)
   const [sourceList, setSourceList] = useState<PurchasingRecord | null>(null)
-  const [editProductId, setEditProductId] = useState<string | null>(null)
   const [adjustProductId, setAdjustProductId] = useState<string | null>(null)
   const [showReservations, setShowReservations] = useState(false)
   const [reserveBike, setReserveBike] = useState<Bike | null>(null)
@@ -90,6 +92,10 @@ export default function POSScreen() {
   const [showNotifs, setShowNotifs] = useState(false)
   const [notifs, setNotifs] = useState<AppNotification[]>([])
   const [notifLoading, setNotifLoading] = useState(false)
+  // Bell anchor for the ported popup (lives at body level so it always floats
+  // above page content, matching the admin dashboard).
+  const bellRef = useRef<HTMLButtonElement | null>(null)
+  const [notifPanel, setNotifPanel] = useState<{ right: number; top: number } | null>(null)
   // Stable identity so CreditModal's load callback (and its refresh timer) don't reset every render.
   const refreshBadge = useCallback(
     (counts: { awaiting: number; approved: number; rejected: number }) => setCreditBadge(counts),
@@ -293,6 +299,13 @@ export default function POSScreen() {
     if (push.error) setFlash(push.error)
   }, [push.error])
 
+  // One-time auto-subscribe hint (iOS install / blocked alerts) from the hook.
+  useEffect(() => {
+    if (!push.notice) return
+    setFlash(push.notice)
+    push.dismissNotice()
+  }, [push.notice, push.dismissNotice])
+
   // Web Push while the POS is open: the service worker forwards every push to
   // the page. Credit decisions (creditEvent) raise the bell toast and refresh
   // the header badge instantly — the 30s poll stays as the fallback for when
@@ -332,16 +345,64 @@ export default function POSScreen() {
     return () => clearInterval(id)
   }, [])
 
+  // Live updates (Workstream D): the server pushes the moment a sale, stock
+  // change, reorder or credit decision lands. Targeted refetch per event keeps
+  // the badge immediate; the 30s polls above stay as the offline fallback.
+  const showNotifsRef = useRef(false)
+  useEffect(() => { showNotifsRef.current = showNotifs }, [showNotifs])
+  useEvents((type) => {
+    if (type === 'ready') return
+    if (type === 'sale.created' || type === 'stock.changed' || type === 'product.updated' || type === 'reorder.status') {
+      void runSyncCycle('sse')
+      void api
+        .reorderCounts()
+        .then((r) => setReorderCount(r.counts.pending + r.counts.processed))
+        .catch(() => {})
+    }
+    if (type === 'notification.created') {
+      void api.unreadCount().then((r) => setNotifUnread(r.unread_count)).catch(() => {})
+      if (showNotifsRef.current) {
+        void api
+          .notifications()
+          .then((r) => { setNotifs(r.notifications); setNotifUnread(r.unread_count) })
+          .catch(() => {})
+      }
+    }
+    if (type === 'approval.decided') {
+      void api.creditSales().then((r) => setCreditBadge(creditBadgeCounts(r.pending))).catch(() => {})
+      void api
+        .creditStatus()
+        .then(({ decisions }) => {
+          const since = localStorage.getItem('spiro_credit_seen')
+          const fresh = since ? decisions.filter((d) => d.decided_at > since) : []
+          if (fresh.length > 0) {
+            const d = fresh[0] // newest first
+            setCreditNote(
+              d.decision === 'approved'
+                ? `Credit ${d.receipt_no} approved — open Credit to finalize`
+                : `Credit ${d.receipt_no} rejected — confirm in the Credit desk, do not release the goods`,
+            )
+            if (audioArmed.current) playPushChime()
+          }
+          if (decisions.length > 0) localStorage.setItem('spiro_credit_seen', decisions[0].decided_at)
+        })
+        .catch(() => {})
+    }
+  })
+
   async function openNotifs() {
     const next = !showNotifs
     setShowNotifs(next)
     if (!next) return
+    // Anchor the ported panel to the bell's viewport rect (right/below).
+    const r = bellRef.current?.getBoundingClientRect()
+    if (r) setNotifPanel({ right: Math.max(8, Math.round(window.innerWidth - r.right)), top: Math.round(r.bottom + 8) })
     setNotifLoading(true)
     try {
-      const r = await api.notifications()
-      // Read notifications are dropped from the list — only unread ones are shown.
-      setNotifs(r.notifications.filter((x) => !x.read_at))
-      setNotifUnread(r.unread_count)
+      // Server returns unread rows only — read ones are already purged.
+      const res = await api.notifications()
+      setNotifs(res.notifications)
+      setNotifUnread(res.unread_count)
     } catch {
       /* offline — keep what we had */
     }
@@ -349,22 +410,21 @@ export default function POSScreen() {
   }
 
   async function clickNotif(n: AppNotification) {
-    // Read notifications are removed from the list, not dimmed: acknowledging a
-    // notification pops it out of the inbox view entirely.
+    // Acknowledging deletes the row from the database (container is unread-only).
     setNotifs((prev) => prev.filter((x) => x.id !== n.id))
     setNotifUnread((c) => Math.max(0, c - 1))
     setShowNotifs(false)
     // Single-screen app: no deep-linking — just acknowledge the headline.
     setFlash(n.title)
-    try { await api.markNotificationRead(n.id) } catch { /* next poll reconciles */ }
+    try { await api.deleteNotification(n.id) } catch { /* next poll reconciles */ }
   }
 
-  async function readAllNotifs() {
-    // Mark everything read on the server, then drop all notifications from the
-    // list — only unread notifications are kept on display.
+  async function clearNotifs() {
+    // Purge every row for this user — the list empties for real, not visually.
     setNotifs([])
     setNotifUnread(0)
-    try { await api.markAllNotificationsRead() } catch { /* non-fatal */ }
+    try { await api.clearNotifications() } catch { /* non-fatal */ }
+    setFlash('Notifications cleared')
   }
 
   const totals = cartTotals(cart.items)
@@ -447,28 +507,22 @@ export default function POSScreen() {
 
         <div className="ml-auto flex items-center gap-3 text-xs text-slate-400">
           <span>Today: <span className="text-white font-semibold">{todayStats.count}</span> sales · <span className="text-brand-300 font-semibold">{ugx(todayStats.revenue)}</span></span>
-          {push.state !== 'subscribed' && push.state !== 'unsupported' && (
-            <button
-              className="btn-ghost text-xs"
-              disabled={push.busy}
-              title={
-                push.state === 'denied'
-                  ? 'Notifications are blocked in the browser — allow them via the address-bar lock icon, then retry'
-                  : 'Get an OS notification for credit decisions, release outcomes, installments and permission grants'
-              }
-              onClick={() => {
-                void push.enable().then((ok) => {
-                  if (ok) setFlash('Alerts on — you’ll be pinged the moment a decision or grant lands')
-                })
-              }}
-            >
-              {push.busy ? 'Enabling…' : push.state === 'denied' ? 'Alerts blocked' : 'Enable alerts'}
-            </button>
+          {/* Alerts subscribe automatically on load (Workstream B) — passive badge only. */}
+          {push.state === 'subscribed' ? (
+            <span className="flex items-center gap-1.5 text-brand-300" title="Credit decisions, releases, installments and grants arrive as notifications">
+              <span className="h-1.5 w-1.5 rounded-full bg-brand-400 animate-pulse" />
+              Alerts on
+            </span>
+          ) : (
+            <span className="text-slate-500" title="Alerts start automatically once the browser allows notifications">
+              🔔 Alerts auto
+            </span>
           )}
           {/* Durable inbox bell */}
           <div className="relative">
             <button
               type="button"
+              ref={bellRef}
               className="btn-ghost text-xs relative"
               onClick={() => void openNotifs()}
               title={notifUnread > 0 ? `${notifUnread} unread notification${notifUnread === 1 ? '' : 's'}` : 'Notifications'}
@@ -483,15 +537,22 @@ export default function POSScreen() {
                 </span>
               )}
             </button>
-            {showNotifs && (
+            {/* Inbox popup — portaled to <body>: unread rows only, "Clear all"
+                purges them from the DB (mirrors the admin dashboard). */}
+            {showNotifs && notifPanel && createPortal(
               <>
-                <div className="fixed inset-0 z-40" onClick={() => setShowNotifs(false)} />
-                <div className="absolute right-0 top-full mt-2 w-[300px] max-h-[70vh] overflow-y-auto card p-2 z-50 shadow-2xl">
+                <div className="fixed inset-0 z-[90]" onClick={() => setShowNotifs(false)} />
+                <div
+                  className="fixed w-[300px] max-h-[70vh] overflow-y-auto card p-2 z-[100] shadow-2xl"
+                  style={{ right: notifPanel.right, top: notifPanel.top }}
+                >
                   <div className="flex items-center justify-between px-2 py-1.5">
                     <span className="text-xs font-semibold text-white uppercase tracking-wider">Notifications</span>
-                    <button type="button" className="text-[11px] text-brand-300 hover:text-brand-200" onClick={() => void readAllNotifs()}>
-                      Mark all read
-                    </button>
+                    {notifs.length > 0 && (
+                      <button type="button" className="text-[11px] text-brand-300 hover:text-brand-200" onClick={() => void clearNotifs()}>
+                        Clear all
+                      </button>
+                    )}
                   </div>
                   {notifLoading ? (
                     <p className="text-xs text-slate-500 px-2 py-3">Loading…</p>
@@ -504,10 +565,10 @@ export default function POSScreen() {
                           key={n.id}
                           type="button"
                           onClick={() => void clickNotif(n)}
-                          className={cn('w-full text-left rounded-lg px-2.5 py-2 transition bg-brand-500/10 hover:bg-brand-500/20')}
+                          className="w-full text-left rounded-lg px-2.5 py-2 transition bg-brand-500/10 hover:bg-brand-500/20"
                         >
                           <div className="flex items-start gap-2">
-                            {!n.read_at && <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-400" />}
+                            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-400" />
                             <div className="min-w-0">
                               <div className="text-xs font-semibold text-white truncate">{n.title}</div>
                               <div className="text-[11px] text-slate-400 leading-snug">{n.body}</div>
@@ -521,7 +582,8 @@ export default function POSScreen() {
                     </div>
                   )}
                 </div>
-              </>
+              </>,
+              document.body,
             )}
           </div>
           {canCreditDesk && (
@@ -601,17 +663,12 @@ export default function POSScreen() {
               )}
               {(canEditProducts || canAdjustInventory) && (
                 <button
-                  className="btn-ghost text-xs"
-                  onClick={() => {
-                    if (stockMode === 'edit-products') setStockMode(null)
-                    else if (stockMode === 'adjust-inventory') setStockMode(null)
-                    else setStockMode(canEditProducts ? 'edit-products' : 'adjust-inventory')
-                  }}
+                  // Armed (reading "Cancel") = orange; idle (reading
+                  // "Adjust inventory") = gray ghost.
+                  className={cn('text-xs', stockMode === 'adjust-inventory' ? 'btn-warn' : 'btn-ghost')}
+                  onClick={() => setStockMode(stockMode === 'adjust-inventory' ? null : 'adjust-inventory')}
                 >
-                  {stockMode === 'edit-products' || stockMode === 'adjust-inventory'
-                    ? '✕ Cancel'
-                    : (canEditProducts ? 'Edit products' : 'Adjust inventory')
-                  }
+                  {stockMode === 'adjust-inventory' ? '✕ Cancel' : 'Adjust inventory'}
                 </button>
               )}
             </div>
@@ -678,15 +735,13 @@ export default function POSScreen() {
                       key={p.id}
                       disabled={out && stockMode === null}
                       onClick={() => {
-                        if (stockMode === 'edit-products') setEditProductId(p.id)
-                        else if (stockMode === 'adjust-inventory') setAdjustProductId(p.id)
+                        if (stockMode === 'adjust-inventory') setAdjustProductId(p.id)
                         else addProduct(p)
                       }}
                       className={cn(
-                        'card p-3 text-left hover:border-brand-500/50 transition',
+                        'card p-3 text-left hover:border-brand-500/30 transition',
                         (out && stockMode === null) && 'opacity-40 cursor-not-allowed',
-                        stockMode === 'edit-products' && 'border-brand-500/30',
-                        stockMode === 'adjust-inventory' && 'border-amber-500/30',
+                        stockMode === 'adjust-inventory' && 'border-orange-500/40',
                       )}
                     >
                       <div className="text-[10px] text-slate-500 uppercase tracking-wide">{p.category}</div>
@@ -951,17 +1006,10 @@ export default function POSScreen() {
         />
       )}
 
-      {stockMode === 'edit-products' && editProductId && (
-        <EditProductsModal
-          productId={editProductId}
-          onClose={() => { setEditProductId(null); setStockMode(null) }}
-          onDone={(message) => { setStockMode(null); setEditProductId(null); setFlash(message); void runSyncCycle('after-edit') }}
-        />
-      )}
-
       {stockMode === 'adjust-inventory' && adjustProductId && (
         <AdjustInventoryModal
           productId={adjustProductId}
+          canEdit={canEditProducts || canAdjustInventory}
           onClose={() => { setAdjustProductId(null); setStockMode(null) }}
           onDone={(message) => { setStockMode(null); setAdjustProductId(null); setFlash(message); void runSyncCycle('after-adjust') }}
         />

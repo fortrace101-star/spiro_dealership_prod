@@ -23,6 +23,8 @@ app.use('/api/sync', require('./routes/sync'));
 app.use('/api/push', require('./routes/push'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/reports', require('./routes/reports'));
+// Server-Sent Events hub — live badge/state updates across admin + POS.
+app.use('/api/events', require('./routes/events').router);
 
 // 404 for unknown API routes
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));

@@ -42,8 +42,10 @@ const PERM_GROUPS: { group: string; options: { id: PosPermission; label: string;
       { id: 'inventory_receive', label: 'Receive stock', hint: 'Record consignments, create new SKUs and start a standalone restock — the whole receive flow' },
       { id: 'reorder_create', label: 'Create reorder lists', hint: 'Draft what to order next — never changes stock' },
       { id: 'reorder_manage', label: 'Manage reorder lists', hint: 'Mark a list processed / fulfilled / cancelled' },
-      { id: 'product_edit', label: 'Edit products', hint: 'Modify existing product info (name, SKU, price, barcode, supplier, category) — manager by default' },
-      { id: 'inventory_adjust', label: 'Adjust inventory', hint: 'Correct stock counts, mark damaged/transfer/adjust quantities — manager by default' },
+      // `product_edit` was folded into `inventory_adjust` (Phase 2) — the POS
+      // Adjust Inventory modal edits product details too. Legacy grants still
+      // work: the server expands stored `product_edit` → `inventory_adjust`.
+      { id: 'inventory_adjust', label: 'Adjust inventory', hint: 'Correct stock counts AND edit product details (name, SKU, price, barcode, supplier, category) — manager by default' },
     ],
   },
 ]
@@ -334,15 +336,27 @@ export default function TeamPage() {
       </div>
 
       {/* Staff performance — relocated from Settings; period-filtered */}
-      <section className="card p-5 mt-4">
+      {/* `relative` anchors the picker's custom-range panel to the whole card
+          (the picker column is capped at 260px — see PeriodPicker). */}
+      <section className="card p-5 mt-4 relative">
         {/* Title on its own row so the picker (and its custom-range panel,
             which spans the full card width) never gets boxed into a 208px
             column — the same pattern the Overview filter uses. */}
         <div className="mb-4">
           <h3 className="font-semibold text-white">Staff performance</h3>
         </div>
-        <div className="w-full sm:max-w-[260px] mb-4">
-          <PeriodPicker period={period} onChange={setPeriod} variant="select" />
+        {/* Full-width relative wrapper: the select stays capped at 260px but
+            the custom-range panel anchors to this wrapper, so From/To/Apply
+            get the full card width instead of 260px. */}
+        <div className="relative w-full mb-4">
+          <div className="w-full sm:max-w-[260px]">
+            <PeriodPicker
+              period={period}
+              onChange={setPeriod}
+              variant="select"
+              panelClassName="absolute left-0 right-0 top-full mt-3 z-40 bg-[#12161d] rounded-2xl p-3 shadow-2xl border border-slate-700/60"
+            />
+          </div>
         </div>
         {cashiers === null ? (
           <Spinner />

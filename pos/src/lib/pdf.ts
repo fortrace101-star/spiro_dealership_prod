@@ -172,3 +172,160 @@ function slug(s: string): string {
       .slice(0, 60) || 'document'
   )
 }
+
+// ---------------------------------------------------------------------------
+// Receipt PDF — 80mm thermal-style roll, one continuous page.
+// Vector text (selectable, no canvas rasterisation), same house look as the
+// A4 writer above. Used by the Sale Completed modal's "Print receipt" button.
+// ---------------------------------------------------------------------------
+
+const R_W = 80 // 80mm receipt roll
+const R_M = 5 // side margin
+const R_CW = R_W - R_M * 2
+
+export interface ReceiptLine {
+  name: string
+  qty: number
+  unit_price: number
+  line_total: number
+}
+
+export interface ReceiptData {
+  receiptNo: string
+  createdAt: string
+  cashier: string
+  device: string
+  customerName?: string | null
+  customerPhone?: string | null
+  items: ReceiptLine[]
+  subtotal: number
+  discount: number
+  total: number
+  paymentLabel: string
+  amountPaid: number
+  changeDue: number
+  /** Credit sales await admin approval — no money moves yet. */
+  awaitingApproval?: boolean
+  /** Recorded offline; will sync when back online. */
+  pendingSync?: boolean
+  /** Formats a number as UGX (same helper the screen uses). */
+  fmt: (n: number) => string
+}
+
+/** Draw an 80mm receipt PDF and trigger the browser download. */
+export function saveReceiptPdf(data: ReceiptData, filename: string): void {
+  const doc = new jsPDF({ unit: 'mm', format: [R_W, 200] })
+  let y = 8
+  const pageH = 200 // matches the [R_W, 200] format; rolls flow onto extra pages
+
+  const ensure = (h: number) => {
+    if (y + h > pageH - 6) {
+      doc.addPage([R_W, 200], 'portrait')
+      y = 8
+    }
+  }
+
+  /** Centre/left text helper with wrapping; returns the y after the block. */
+  const text = (
+    s: string,
+    opts: { size?: number; bold?: boolean; muted?: boolean; align?: 'left' | 'center' | 'right'; gap?: number } = {},
+  ) => {
+    const { size = 8, bold = false, muted = false, align = 'left', gap = 1.5 } = opts
+    doc.setFont('helvetica', bold ? 'bold' : 'normal')
+    doc.setFontSize(size)
+    if (muted) doc.setTextColor(100, 116, 139)
+    else doc.setTextColor(15, 23, 42)
+    const lines = doc.splitTextToSize(s, R_CW) as string[]
+    for (const line of lines) {
+      ensure(size * 0.353 + 1)
+      const x =
+        align === 'center' ? R_W / 2 : align === 'right' ? R_W - R_M : R_M
+      doc.text(line, x, y, { align })
+      y += size * 0.353 * 1.25
+    }
+    y += gap
+  }
+
+  const rule = () => {
+    ensure(3)
+    doc.setDrawColor(148, 163, 184)
+    doc.setLineWidth(0.2)
+    doc.setLineDashPattern([1, 1], 0)
+    doc.line(R_M, y, R_W - R_M, y)
+    doc.setLineDashPattern([], 0)
+    y += 3
+  }
+
+  /** Right-aligned money line: label left, amount right, same baseline. */
+  const moneyRow = (label: string, amount: string, opts: { bold?: boolean; size?: number; muted?: boolean } = {}) => {
+    const { bold = false, size = 8, muted = false } = opts
+    ensure(size * 0.353 + 2)
+    doc.setFont('helvetica', bold ? 'bold' : 'normal')
+    doc.setFontSize(size)
+    if (muted) doc.setTextColor(100, 116, 139)
+    else doc.setTextColor(15, 23, 42)
+    doc.text(label, R_M, y)
+    doc.text(amount, R_W - R_M, y, { align: 'right' })
+    y += size * 0.353 * 1.3
+  }
+
+  // ---- Header ----
+  text('SPIRO E-BIKES & PARTS', { size: 11, bold: true, align: 'center', gap: 0.5 })
+  text('Kampala, Uganda · +256 700 000 000', { size: 7, muted: true, align: 'center', gap: 1 })
+  rule()
+
+  // ---- Meta ----
+  text(`Receipt: ${data.receiptNo}`, { bold: true, gap: 0.5 })
+  text(`${data.createdAt} · ${data.cashier} · ${data.device}`, { size: 7, muted: true, gap: 0.5 })
+  if (data.customerName) {
+    text(
+      `Customer: ${data.customerName}${data.customerPhone ? ` (${data.customerPhone})` : ''}`,
+      { size: 7, muted: true, gap: 0.5 },
+    )
+  }
+  rule()
+
+  // ---- Items ----
+  for (const i of data.items) {
+    ensure(9)
+    // Name (wrapped) on the left, line total flush right on the first line.
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(8)
+    doc.setTextColor(15, 23, 42)
+    const nameLines = doc.splitTextToSize(i.name, R_CW - 18) as string[]
+    let baseline = y
+    for (const line of nameLines) {
+      doc.text(line, R_M, baseline)
+      baseline += 3.2
+    }
+    doc.text(data.fmt(i.line_total), R_W - R_M, y, { align: 'right' })
+    y = baseline
+    doc.setFontSize(7)
+    doc.setTextColor(100, 116, 139)
+    doc.text(`${i.qty} × ${data.fmt(i.unit_price)}`, R_M, y)
+    y += 4
+  }
+  rule()
+
+  // ---- Totals ----
+  moneyRow('Subtotal', data.fmt(data.subtotal))
+  if (data.discount > 0) moneyRow('Discount', `- ${data.fmt(data.discount)}`, { muted: true })
+  y += 1
+  moneyRow('TOTAL', data.fmt(data.total), { bold: true, size: 11 })
+  y += 1
+  if (data.awaitingApproval) {
+    moneyRow('Status', 'AWAITING APPROVAL', { bold: true })
+  } else {
+    moneyRow(`Paid (${data.paymentLabel})`, data.fmt(data.amountPaid))
+    if (data.changeDue > 0) moneyRow('Change', data.fmt(data.changeDue), { muted: true })
+  }
+  rule()
+
+  // ---- Footer ----
+  text('Asante sana! Warranty at receipt presentation.', { size: 7, muted: true, align: 'center', gap: 1 })
+  if (data.pendingSync) {
+    text('[Recorded offline — will sync]', { size: 7, muted: true, align: 'center', gap: 0 })
+  }
+
+  doc.save(filename)
+}

@@ -26,6 +26,12 @@ export function clearSession() {
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(USER_KEY)
 }
+/** SSE endpoint (with auth token) — EventSource cannot send headers, so the
+ *  token rides as a query param (see server/src/routes/events.js). */
+export function eventsUrl(): string {
+  const token = getToken() || ''
+  return `${API_URL}/api/events?token=${encodeURIComponent(token)}`
+}
 export function getStoredUser(): SessionUser | null {
   try {
     const raw = localStorage.getItem(USER_KEY)
@@ -429,8 +435,12 @@ export const api = {
     }),
 
   // ---------- Notifications: durable inbox shared with the admin dashboard ----------
+  // Unread rows only; read rows are purged from the DB (per-row on click,
+  // bulk via clearNotifications) rather than kept around as dimmed entries.
   notifications: () => request<{ notifications: AppNotification[]; unread_count: number }>('/api/notifications'),
   unreadCount: () => request<{ unread_count: number }>('/api/notifications/unread-count'),
   markNotificationRead: (id: string) => request<{ ok: boolean }>(`/api/notifications/${id}/read`, { method: 'POST' }),
   markAllNotificationsRead: () => request<{ ok: boolean }>('/api/notifications/read-all', { method: 'POST' }),
+  deleteNotification: (id: string) => request<{ ok: boolean }>(`/api/notifications/${id}`, { method: 'DELETE' }),
+  clearNotifications: () => request<{ ok: boolean; deleted: number }>('/api/notifications', { method: 'DELETE' }),
 }

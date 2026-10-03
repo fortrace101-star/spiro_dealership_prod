@@ -195,6 +195,20 @@ async function recordSale(input, actor) {
       `[sale] RECORDED ${sale.receipt_no} | ${cashierName} | UGX ${Number(sale.total).toLocaleString('en-UG', { maximumFractionDigits: 0 })} | ${sale.payment_method}${input.device_id ? ` | device ${input.device_id}` : ''}${(input.items || []).length ? ` | ${input.items.length} item(s)` : ''}`
     );
     const pushSvc = require('./push');
+    const { emit } = require('../routes/events');
+    // Live cross-stack signal (Workstream D): the admin console recounts its
+    // cards/badges the instant a sale lands, without waiting for its poll.
+    if (sale.status === 'pending_credit') {
+      emit('approval.created', { saleId: sale.id, receiptNo: sale.receipt_no, total: Number(sale.total) || 0 });
+    } else {
+      emit('sale.created', {
+        saleId: sale.id,
+        receiptNo: sale.receipt_no,
+        total: Number(sale.total) || 0,
+        paymentMethod: sale.payment_method,
+      });
+      emit('stock.changed', { reason: 'sale', saleId: sale.id, receiptNo: sale.receipt_no });
+    }
     setImmediate(async () => {
       // A pending credit sale is announced only through its approval push —
       // it has no stock, no revenue and no liability until finalized.

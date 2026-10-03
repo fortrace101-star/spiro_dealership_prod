@@ -1,6 +1,6 @@
 import type {
   ActivationCode, Approval, AuditEntry, Bike, BikeReservation, CreditLedgerSale, Customer, CustomerBikeLink, InstallmentPayment,
-  Product, PurchasingListItem, PurchasingRecord, RangeReport,
+  Product, PurchasingListItem, PurchasingRecord, PeriodReport, RangeReport,
   Sale, SaleItem, ServiceJobCard, StockMovement, TodayReport, HourlyPoint, User, VinLookupResult,
 } from './types'
 
@@ -18,6 +18,12 @@ export function setSession(token: string, user: unknown) {
 export function clearSession() {
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(USER_KEY)
+}
+/** SSE endpoint (with auth token) — EventSource cannot send headers, so the
+ *  token rides as a query param (see server/src/routes/events.js). */
+export function eventsUrl(): string {
+  const token = getToken() || ''
+  return `${API_URL}/api/events?token=${encodeURIComponent(token)}`
 }
 export function getStoredUser(): unknown | null {
   try {
@@ -88,11 +94,16 @@ export const api = {
   changePassword: (current: string, next: string) =>
     request<{ ok: boolean }>('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ current, next }) }),
 
-  // notifications — durable inbox shared with the POS (per-user rows)
+  // notifications — durable inbox shared with the POS (per-user rows).
+  // The container is unread-only: read rows are purged from the DB, not dimmed.
   notifications: () => request<{ notifications: AppNotification[]; unread_count: number }>('/api/notifications'),
   unreadCount: () => request<{ unread_count: number }>('/api/notifications/unread-count'),
   markNotificationRead: (id: string) => request<{ ok: boolean }>(`/api/notifications/${id}/read`, { method: 'POST' }),
   markAllNotificationsRead: () => request<{ ok: boolean }>('/api/notifications/read-all', { method: 'POST' }),
+  /** Acknowledge one notification — deleted from the database. */
+  deleteNotification: (id: string) => request<{ ok: boolean }>(`/api/notifications/${id}`, { method: 'DELETE' }),
+  /** "Clear all" — purges every row for this user. */
+  clearNotifications: () => request<{ ok: boolean; deleted: number }>('/api/notifications', { method: 'DELETE' }),
 
   // reports — window helpers accept preset days OR explicit from/to ISO dates
   today: () => request<TodayReport>('/api/reports/today'),
@@ -142,6 +153,9 @@ export const api = {
     )
   },
   lowStock: () => request<{ products: Product[] }>('/api/reports/low-stock'),
+  /** One round-trip aggregate powering the Download Report PDF (Workstream I). */
+  periodReport: (from: string, to: string) =>
+    request<PeriodReport>(`/api/reports/period?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
 
   // sales
   sales: (params = '') => request<{ sales: Sale[] }>(`/api/admin/sales?${params}`),
@@ -152,6 +166,12 @@ export const api = {
     request<{ products: Product[] }>(`/api/admin/products?q=${encodeURIComponent(q)}${lowStock ? '&low_stock=1' : ''}`),
   createProduct: (p: Partial<Product>) => request<{ product: Product }>('/api/admin/products', { method: 'POST', body: JSON.stringify(p) }),
   updateProduct: (id: string, p: Partial<Product>) => request<{ product: Product }>(`/api/admin/products/${id}`, { method: 'PUT', body: JSON.stringify(p) }),
+  /** Admin-only: hard delete; 409 { can_deactivate } when it has sales history. */
+  deleteProduct: (id: string) =>
+    request<{ ok: boolean; deleted: string }>(`/api/admin/products/${id}`, { method: 'DELETE' }),
+  /** Admin-only: soft delete — hidden everywhere, history intact. */
+  deactivateProduct: (id: string) =>
+    request<{ ok: boolean; product: Product }>(`/api/admin/products/${id}/deactivate`, { method: 'POST' }),
   bikes: (q = '', status = '') => request<{ bikes: Bike[] }>(`/api/admin/bikes?q=${encodeURIComponent(q)}&status=${status}`),
   createBike: (b: Partial<Bike>) => request<{ bike: Bike }>('/api/admin/bikes', { method: 'POST', body: JSON.stringify(b) }),
   updateBike: (id: string, b: Partial<Bike>) => request<{ bike: Bike }>(`/api/admin/bikes/${id}`, { method: 'PUT', body: JSON.stringify(b) }),
@@ -209,6 +229,14 @@ export const api = {
     request<{ record: PurchasingRecord; duplicate: boolean }>('/api/purchasing/reorders', { method: 'POST', body: JSON.stringify(payload) }),
 
   nextReorderRef: () => request<{ title: string }>('/api/purchasing/reorders/next-ref'),
+
+  // Admin-only: rework the title, notes and line items of a reorder list that is
+  // still pending/processing. Fulfilled or cancelled lists are immutable (409).
+  updateReorder: (id: string, payload: { title: string; notes: string; items: PurchasingListItem[] }) =>
+    request<{ record: PurchasingRecord }>(`/api/purchasing/reorders/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
 
   // Reorder-list lifecycle: pending -> processed (list prepared) -> fulfilled.
   // 'fulfilled' is NOT set directly — it happens server-side when a consignment

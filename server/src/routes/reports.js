@@ -363,4 +363,206 @@ router.get('/low-stock', async (req, res) => {
   res.json({ products });
 });
 
+/**
+ * One round-trip aggregate for the Download Report PDF (Workstream I).
+ * Returns every section the PDF renders for the selected window — KPI (incl.
+ * discounts, credit collected, outstanding debt, reservations collected),
+ * daily series, payment mix, top products, staff performance, low-stock
+ * snapshot, and the purchasing / reservation activity inside the window — so
+ * the client makes a single call. Existing /range, /payments, /top-products
+ * stay untouched for the on-screen cards.
+ */
+router.get('/period', async (req, res) => {
+  const MAX_DAYS = 730;
+  const to = req.query.to ? new Date(String(req.query.to)) : new Date();
+  const from = req.query.from ? new Date(String(req.query.from)) : new Date(to.getTime() - 29 * 86400000);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    return res.status(400).json({ error: 'Invalid from/to' });
+  }
+  const days = Math.ceil((to - from) / 86400000);
+  if (days < 0) return res.status(400).json({ error: 'from must precede to' });
+  if (days > MAX_DAYS) return res.status(400).json({ error: 'Range too long: maximum is 2 years' });
+  const params = [from.toISOString(), to.toISOString()];
+  // Same half-open convention as reportWindow so the PDF matches the screen.
+  const win = (col) => `${col} >= $1 AND ${col} < $2`;
+
+  // ---- KPI -----------------------------------------------------------------
+  const kpi = await one(
+    `SELECT count(*)::int AS sales_count,
+            COALESCE(sum(total) FILTER (WHERE payment_method <> 'credit'),0) AS revenue,
+            COALESCE(sum(profit) FILTER (WHERE payment_method <> 'credit'),0) AS profit,
+            COALESCE(avg(total) FILTER (WHERE payment_method <> 'credit'),0) AS avg_transaction,
+            COALESCE(sum(discount),0) AS discounts
+       FROM sales
+      WHERE ${win('created_at')} AND status='completed'`, params
+  );
+  const items = await one(
+    `SELECT COALESCE(sum(si.qty) FILTER (WHERE si.kind='bike'),0)::int AS bikes,
+            COALESCE(sum(si.qty) FILTER (WHERE si.kind='part'),0)::int AS parts
+       FROM sale_items si JOIN sales s ON s.id = si.sale_id
+      WHERE ${win('s.created_at')} AND s.status='completed'`, params
+  );
+  const collected = await one(
+    `SELECT COALESCE(sum(amount),0) AS amount, count(*)::int AS n
+       FROM credit_payments WHERE ${win('created_at')}`, params
+  );
+  const outstanding = await one(
+    `SELECT COALESCE(sum(total),0) - COALESCE((SELECT sum(amount) FROM credit_payments),0) AS amount
+       FROM sales WHERE payment_method='credit' AND status='completed'`
+  );
+  const stockValue = await one(
+    `SELECT COALESCE(sum(stock_qty * cost_price),0) AS amount FROM products WHERE active`
+  );
+
+  // ---- Daily revenue & profit (product sales + credit settlements) ---------
+  const daily = await many(
+    `SELECT date_trunc('day', created_at)::date AS day,
+            COALESCE(sum(total) FILTER (WHERE payment_method <> 'credit'),0) AS revenue,
+            COALESCE(sum(profit) FILTER (WHERE payment_method <> 'credit'),0) AS profit
+       FROM sales
+      WHERE ${win('created_at')} AND status='completed'
+      GROUP BY day ORDER BY day`, params
+  );
+  const dailySettle = await many(
+    `SELECT date_trunc('day', created_at)::date AS day, COALESCE(sum(amount),0) AS revenue
+       FROM credit_payments WHERE ${win('created_at')}
+      GROUP BY day ORDER BY day`, params
+  );
+  const settleByDay = new Map(dailySettle.map((r) => [String(r.day), Number(r.revenue) || 0]));
+  for (const row of daily) {
+    row.revenue = Number(row.revenue) + (settleByDay.get(String(row.day)) || 0);
+    row.profit = Number(row.profit);
+  }
+
+  // ---- Payment mix (cash lines + credit settlements split out) -------------
+  const payments = await many(
+    `SELECT payment_method, COALESCE(sum(total),0) AS amount, count(*)::int AS n
+       FROM sales
+      WHERE ${win('created_at')} AND status='completed' AND payment_method <> 'credit'
+      GROUP BY payment_method ORDER BY amount DESC`, params
+  );
+  if (Number(collected.n) > 0) {
+    payments.push({ payment_method: 'credit_settlement', amount: Number(collected.amount), n: Number(collected.n) });
+  }
+
+  // ---- Top products / staff / low stock ------------------------------------
+  const topProducts = await many(
+    `SELECT si.name,
+            COALESCE(sum(si.qty),0)::int AS qty,
+            COALESCE(sum(si.line_total),0) AS revenue,
+            COALESCE(sum(si.line_total - (si.unit_cost * si.qty)),0) AS profit
+       FROM sale_items si JOIN sales s ON s.id = si.sale_id
+      WHERE ${win('s.created_at')}
+      GROUP BY si.name ORDER BY revenue DESC LIMIT 20`, params
+  );
+  const cashiers = await many(
+    `SELECT u.id, u.full_name, count(s.id)::int AS sales_count,
+            COALESCE(sum(s.total),0) AS revenue, COALESCE(sum(s.profit),0) AS profit,
+            COALESCE(sum(s.discount),0) AS discounts
+       FROM users u LEFT JOIN sales s ON s.cashier_id = u.id AND ${win('s.created_at')}
+      WHERE u.role IN ('cashier', 'operator', 'manager')
+      GROUP BY u.id ORDER BY revenue DESC`, params
+  );
+  const lowStock = await many(
+    `SELECT id, sku, name, stock_qty, min_stock, reorder_level
+       FROM products
+      WHERE active AND stock_qty <= reorder_level
+      ORDER BY (stock_qty::float / GREATEST(reorder_level,1)) ASC LIMIT 50`
+  );
+
+  // ---- Purchasing activity inside the window -------------------------------
+  const reorderLists = await many(
+    `SELECT r.id, r.title, r.status, r.notes, r.created_at, u.full_name AS created_by_name,
+            COALESCE(jsonb_array_length(r.items),0)::int AS item_count
+       FROM reorder_lists r JOIN users u ON u.id = r.created_by
+      WHERE ${win('r.created_at')}
+      ORDER BY r.created_at DESC LIMIT 100`, params
+  );
+  const reorderSummary = await many(
+    `SELECT status, count(*)::int AS n
+       FROM reorder_lists WHERE ${win('created_at')} GROUP BY status`, params
+  );
+  const consignments = await many(
+    `SELECT c.id, c.reference, c.supplier, c.delivery_cost, c.items_total, c.created_at
+       FROM consignments c
+      WHERE ${win('c.created_at')}
+      ORDER BY c.created_at DESC LIMIT 100`, params
+  );
+  const consignmentTotals = await one(
+    `SELECT count(*)::int AS n,
+            COALESCE(sum(items_total),0) AS items_total,
+            COALESCE(sum(delivery_cost),0) AS delivery,
+            COALESCE(sum(items_total + delivery_cost),0) AS landed
+       FROM consignments WHERE ${win('created_at')}`, params
+  );
+
+  // ---- Reservations & installments inside the window -----------------------
+  const reservations = await one(
+    `SELECT count(*)::int AS n, COALESCE(sum(down_payment),0) AS down
+       FROM bike_reservations WHERE ${win('created_at')}`, params
+  );
+  const installments = await many(
+    `SELECT ip.id, ip.amount, ip.payment_method, ip.created_at, u.full_name AS paid_by_name
+       FROM bike_installment_payments ip LEFT JOIN users u ON u.id = ip.paid_by
+      WHERE ${win('ip.created_at')}
+      ORDER BY ip.created_at DESC LIMIT 100`, params
+  );
+  const installmentTotal = await one(
+    `SELECT COALESCE(sum(amount),0) AS amount, count(*)::int AS n
+       FROM bike_installment_payments WHERE ${win('created_at')}`, params
+  );
+
+  // ---- Hourly series for single-day windows (Today) ------------------------
+  let hourly = null;
+  if (from.toISOString().slice(0, 10) === to.toISOString().slice(0, 10)) {
+    hourly = await many(
+      `SELECT EXTRACT(HOUR FROM created_at)::int AS hour,
+              COALESCE(sum(total),0) AS revenue, COALESCE(sum(profit),0) AS profit
+         FROM sales
+        WHERE ${win('created_at')} AND status='completed' AND payment_method <> 'credit'
+        GROUP BY hour ORDER BY hour`, params
+    );
+  }
+
+  res.json({
+    from: params[0],
+    to: params[1],
+    kpi: {
+      sales_count: Number(kpi.sales_count),
+      revenue: Number(kpi.revenue),
+      profit: Number(kpi.profit),
+      avg_transaction: Number(kpi.avg_transaction),
+      discounts: Number(kpi.discounts),
+      bikes_sold: Number(items.bikes || 0),
+      parts_sold: Number(items.parts || 0),
+      credit_collected: Number(collected.amount || 0),
+      credit_outstanding: Number(outstanding?.amount || 0),
+      stock_value: Number(stockValue?.amount || 0),
+    },
+    daily,
+    hourly,
+    payments,
+    top_products: topProducts,
+    cashiers,
+    low_stock: lowStock,
+    reorders: { lists: reorderLists, by_status: reorderSummary },
+    consignments: {
+      rows: consignments,
+      totals: {
+        count: Number(consignmentTotals.n),
+        items_total: Number(consignmentTotals.items_total),
+        delivery: Number(consignmentTotals.delivery),
+        landed: Number(consignmentTotals.landed),
+      },
+    },
+    reservations: {
+      count: Number(reservations.n),
+      down: Number(reservations.down),
+      installments_collected: Number(installmentTotal.amount),
+      installments_count: Number(installmentTotal.n),
+      payments: installments,
+    },
+  });
+});
+
 module.exports = router;

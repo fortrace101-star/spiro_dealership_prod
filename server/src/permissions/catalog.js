@@ -145,14 +145,15 @@ const PERMISSIONS = [
     id: 'product_edit',
     group: 'Stock',
     label: 'Edit products',
-    hint: 'Modify existing product info (name, SKU, price, barcode, supplier, category) — manager only, admin can elevate an operator',
+    hint: 'DEPRECATED — folded into "Adjust inventory"; kept only so legacy grants keep working',
     roles: ['manager'],
+    deprecated: true,
   },
   {
     id: 'inventory_adjust',
     group: 'Stock',
     label: 'Adjust inventory',
-    hint: 'Correct stock counts, mark damaged/transfer/adjust quantities — manager only, admin can elevate an operator',
+    hint: 'Adjust stock counts (damaged/transfer/return) AND edit product details (name, SKU, price, barcode, supplier, category) — manager only, admin can elevate an operator',
     roles: ['manager'],
   },
   {
@@ -173,14 +174,19 @@ const BASELINE_PERMISSION_IDS = PERMISSIONS
   .filter((p) => !p.adminOnly && p.roles.includes('operator') && p.roles.includes('manager'))
   .map((p) => p.id);
 
-/** Tickable on a user / activation code: role-specific or manager-by-default. */
+/** Tickable on a user / activation code: role-specific or manager-by-default.
+ *  `deprecated` ids (product_edit) are folded into their successor and never
+ *  offered for new grants — legacy stored values still expand via aliases. */
 const GRANTABLE_PERMISSION_IDS = PERMISSIONS
-  .filter((p) => !p.adminOnly && !BASELINE_PERMISSION_IDS.includes(p.id))
+  .filter((p) => !p.adminOnly && !p.deprecated && !BASELINE_PERMISSION_IDS.includes(p.id))
   .map((p) => p.id);
 
 /** Values stored before this catalog existed, expanded to their successors. */
 const LEGACY_PERMISSION_ALIASES = {
   inventory_entry: ['inventory_receive', 'reorder_manage'],
+  // Edit Products was merged into Adjust Inventory (Phase 2) — an old
+  // product_edit grant now grants inventory_adjust instead.
+  product_edit: ['inventory_adjust'],
 };
 
 /** `cashier` / `mechanic` → `operator`; unknown values pass through untouched. */
@@ -251,7 +257,7 @@ function catalog() {
     groups: GROUPS.map((name) => ({
       name,
       permissions: PERMISSIONS
-        .filter((p) => p.group === name && !p.adminOnly)
+        .filter((p) => p.group === name && !p.adminOnly && !p.deprecated)
         .map((p) => ({
           id: p.id,
           label: p.label,

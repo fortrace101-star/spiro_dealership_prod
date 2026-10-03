@@ -41,6 +41,51 @@ export function playPushChime(): void {
 
 export type PushState = 'unsupported' | 'denied' | 'prompt' | 'subscribed' | 'unsubscribed'
 
+// ---------- Auto-subscribe plumbing (no visible button — see Workstream B) ----------
+
+/** WebKit (Safari/iOS) refuses Notification.requestPermission() outside a user
+ *  gesture, so the first tap/key anywhere arms a one-shot retry. Chromium and
+ *  Firefox allow the prompt to be raised immediately. */
+const IS_WEBKIT =
+  typeof navigator !== 'undefined' &&
+  'safari' in window &&
+  !/Chrome|Chromium|Edg\/|OPR\//.test(navigator.userAgent)
+
+/** iOS/iPadOS only — where push requires the site to be installed to the home
+ *  screen (Share → Add to Home Screen). */
+const IS_IOS =
+  typeof navigator !== 'undefined' &&
+  (/iP(hone|ad|od)/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))
+
+function isStandalone(): boolean {
+  if (typeof window === 'undefined') return false
+  return (
+    window.matchMedia?.('(display-mode: standalone)').matches === true ||
+    (navigator as unknown as { standalone?: boolean }).standalone === true
+  )
+}
+
+/** Module-level so the hint is genuinely one-time per page session, no matter
+ *  how many components mount the hook. */
+let noticeShown = false
+let gestureArmed = false
+
+/** Arm a one-shot gesture listener that retries the subscription on the first
+ *  interaction — the only way WebKit will grant notification permission. */
+function armGestureRetry(retry: () => void): void {
+  if (gestureArmed || typeof document === 'undefined') return
+  gestureArmed = true
+  const fire = () => {
+    document.removeEventListener('pointerdown', fire)
+    document.removeEventListener('keydown', fire)
+    retry()
+  }
+  document.addEventListener('pointerdown', fire, { passive: true })
+  document.addEventListener('keydown', fire)
+}
+
+
 /**
  * Admin dashboard Web Push subscription.
  * On supported browsers + secure origin, registers /sw.js (vite-plugin-pwa),
@@ -132,12 +177,74 @@ export function usePush() {
     }
   }, [])
 
+  // One-time informational message (iOS install hint / blocked alerts). Layout
+  // turns it into a toast, then calls dismissNotice().
+  const [notice, setNotice] = useState('')
+  const dismissNotice = useCallback(() => setNotice(''), [])
+
+  const showNoticeOnce = useCallback((msg: string) => {
+    if (noticeShown) return
+    noticeShown = true
+    setNotice(msg)
+  }, [])
+
+  /** Fully automatic: detect, then subscribe or (silently) prompt. No button. */
+  const ensurePush = useCallback(async (): Promise<boolean> => {
+    // 1. Unsupported browser or insecure origin → silent stop (state explains why).
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      await detect().catch(() => setState('unsupported'))
+      // iOS must be installed to the home screen before it can receive push.
+      if (IS_IOS && !isStandalone()) {
+        showNoticeOnce('For alerts on iPhone/iPad, open Share → “Add to Home Screen”.')
+      }
+      return false
+    }
+    // 5. Denied → silent; a single nudge on mobile where the setting is buried.
+    if (Notification.permission === 'denied') {
+      setState('denied')
+      if (IS_IOS || /Android/i.test(navigator.userAgent)) {
+        showNoticeOnce('Alerts are blocked in the browser — allow notifications for this site in Settings.')
+      }
+      return false
+    }
+    const reg = await navigator.serviceWorker.getRegistration().catch(() => undefined)
+    const existing = reg ? await reg.pushManager.getSubscription().catch(() => null) : null
+    // 2. Already subscribed → done.
+    if (existing) {
+      setState('subscribed')
+      return true
+    }
+    // 3. Permission already granted → subscribe silently.
+    if (Notification.permission === 'granted') return enable()
+    // 4. Default permission: prompt now on Chromium/Firefox; on WebKit wait for
+    //    the first gesture (Safari silently ignores a programmatic prompt).
+    if (!IS_WEBKIT) return enable()
+    setState('prompt')
+    armGestureRetry(() => { void enable() })
+    return false
+  }, [detect, enable, showNoticeOnce])
+
+  // Auto-subscribe on login, and re-assert whenever the tab is refocused, the
+  // device comes back online, or a freshly deployed service worker takes over.
   useEffect(() => {
     if (!getToken()) return
-    detect().catch(() => setState('unsupported'))
-  }, [detect])
+    void ensurePush()
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void ensurePush()
+    }
+    const onOnline = () => { void ensurePush() }
+    const onController = () => { void ensurePush() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', onOnline)
+    navigator.serviceWorker?.addEventListener('controllerchange', onController)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', onOnline)
+      navigator.serviceWorker?.removeEventListener('controllerchange', onController)
+    }
+  }, [ensurePush])
 
-  return { state, busy, error, enable, sendTest, refresh: detect }
+  return { state, busy, error, enable, sendTest, refresh: detect, ensurePush, notice, dismissNotice }
 }
 
 export default usePush

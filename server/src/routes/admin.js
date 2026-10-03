@@ -2,6 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const { one, many, query, pool } = require('../db');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { emit } = require('./events');
 const { requirePermission } = require('../middleware/permissions');
 const {
   POS_ROLES,
@@ -139,7 +140,7 @@ router.get('/products', async (req, res) => {
   res.json({ products });
 });
 
-router.post('/products', requireRole('manager'), requirePermission(['inventory_receive', 'product_edit']), async (req, res) => {
+router.post('/products', requireRole('manager'), requirePermission(['inventory_receive', 'inventory_adjust', 'product_edit']), async (req, res) => {
   try {
     const p = req.body || {};
     if (!p.sku || !p.name) return res.status(400).json({ error: 'sku and name required' });
@@ -155,6 +156,7 @@ router.post('/products', requireRole('manager'), requirePermission(['inventory_r
         [rec.id, Number(p.stock_qty), req.user.id]);
     }
     await audit({ userId: req.user.id, action: 'create_product', entity: 'product', entityId: rec.id, newValue: rec });
+    emit('product.updated', { id: rec.id, action: 'created' });
     res.status(201).json({ product: rec });
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'SKU or barcode already exists' });
@@ -162,7 +164,7 @@ router.post('/products', requireRole('manager'), requirePermission(['inventory_r
   }
 });
 
-router.put('/products/:id', requireRole('manager'), requirePermission('product_edit'), async (req, res) => {
+router.put('/products/:id', requireRole('manager'), requirePermission(['inventory_adjust', 'product_edit']), async (req, res) => {
   const before = await one(`SELECT * FROM products WHERE id = $1`, [req.params.id]);
   if (!before) return res.status(404).json({ error: 'Product not found' });
   const p = { ...before, ...req.body };
@@ -175,7 +177,53 @@ router.put('/products/:id', requireRole('manager'), requirePermission('product_e
      Number(p.reorder_level) || 10, p.active !== false]
   );
   await audit({ userId: req.user.id, action: 'update_product', entity: 'product', entityId: rec.id, oldValue: before, newValue: rec });
+  emit('product.updated', { id: rec.id, action: 'updated' });
   res.json({ product: rec });
+});
+
+// Delete a product — ADMIN ONLY (D2 decision). Hard delete when nothing
+// references the row; if the SKU appears in sales history the FK blocks it, so
+// we answer 409 { can_deactivate: true } and the UI offers Deactivate instead.
+// Financial history (sale_items / credit) is never orphaned.
+router.delete('/products/:id', requireRole('admin'), async (req, res) => {
+  try {
+    const before = await one(`SELECT * FROM products WHERE id = $1`, [req.params.id]);
+    if (!before) return res.status(404).json({ error: 'Product not found' });
+    try {
+      // stock_movements cascade (ON DELETE CASCADE); sale_items block (no ON DELETE).
+      await query(`DELETE FROM products WHERE id = $1`, [req.params.id]);
+    } catch (err) {
+      if (err && err.code === '23503') {
+        return res.status(409).json({
+          error: `"${before.name}" has sales history — deactivate it instead of deleting`,
+          can_deactivate: true,
+        });
+      }
+      throw err;
+    }
+    await audit({ userId: req.user.id, action: 'delete_product', entity: 'product', entityId: before.id, oldValue: before, newValue: null });
+    emit('product.updated', { id: before.id, action: 'deleted' });
+    res.json({ ok: true, deleted: before.name });
+  } catch (err) {
+    console.error('[admin/products/:id DELETE]', err);
+    res.status(500).json({ error: 'Failed to delete product' });
+  }
+});
+
+// Deactivate (soft delete): hidden from the POS + admin catalogs (both filter
+// active=TRUE) while every sale/credit/stock record stays intact.
+router.post('/products/:id/deactivate', requireRole('admin'), async (req, res) => {
+  try {
+    const before = await one(`SELECT * FROM products WHERE id = $1`, [req.params.id]);
+    if (!before) return res.status(404).json({ error: 'Product not found' });
+    const rec = await one(`UPDATE products SET active = FALSE, updated_at = now() WHERE id = $1 RETURNING *`, [req.params.id]);
+    await audit({ userId: req.user.id, action: 'deactivate_product', entity: 'product', entityId: rec.id, oldValue: before, newValue: rec });
+    emit('product.updated', { id: rec.id, action: 'deactivated' });
+    res.json({ ok: true, product: rec });
+  } catch (err) {
+    console.error('[admin/products/:id/deactivate]', err);
+    res.status(500).json({ error: 'Failed to deactivate product' });
+  }
 });
 
 // ---------- Bikes (admin) ----------
@@ -669,6 +717,7 @@ router.post('/inventory/adjust', requireRole('manager'), requirePermission(['inv
   );
   await audit({ userId: req.user.id, action: 'stock_adjustment', entity: 'product', entityId: product_id,
     oldValue: { stock_qty: product.stock_qty }, newValue: { stock_qty: newQty }, meta: { note } });
+  emit('stock.changed', { reason: 'adjustment', productId: product_id, stockQty: newQty });
   res.status(201).json({ movement: mv, stock_qty: newQty });
 });
 
@@ -724,6 +773,7 @@ router.post('/approvals/:id/decide', requireRole(), async (req, res) => {
     try {
       const { decideCreditApproval } = require('../services/credit');
       const r = await decideCreditApproval(req.params.id, decision, note || null, req.user);
+      emit('approval.decided', { id: req.params.id, decision, type: 'credit_sale', saleId: r.sale && r.sale.id });
       return res.json({ approval: r.approval, sale: r.sale });
     } catch (err) {
       return res.status(err.status || 500).json({ error: err.message });
@@ -754,6 +804,7 @@ router.post('/approvals/:id/decide', requireRole(), async (req, res) => {
     const p = prior.payload || {};
     setImmediate(() => pushSvc.notifyUser(prior.requested_by, pushSvc.releaseDecision(decision, { ...p, note: note || null })).catch(() => {}));
   }
+  emit('approval.decided', { id: rec.id, decision, type: (prior && prior.type) || 'generic' });
   res.json({ approval: rec });
 });
 

@@ -1,14 +1,15 @@
-﻿import { useEffect, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { canAccess } from '../lib/access'
 import { playPushChime, usePush } from '../hooks/usePush'
+import { useEvents } from '../hooks/useEvents'
 import { api, type AppNotification } from '../lib/api'
 import { ugx } from '../lib/format'
 import { Modal } from './Modal'
+import { showToast, ToastHost } from './Toaster'
 import { cn } from '../lib/cn'
-
-interface Toast { id: number; title: string; body: string }
 
 const NAV = [
   { to: '/', label: 'Overview', icon: 'M3 12l9-8 9 8M5 10v10a1 1 0 001 1h4v-6h4v6h4a1 1 0 001-1V10' },
@@ -62,13 +63,19 @@ function Beacon() {
 export default function Layout() {
   const { user, logout } = useAuth()
   const push = usePush()
+  // The hook subscribes automatically; any one-time hint (iOS install, blocked
+  // alerts) is surfaced as a toast instead of a button the user must find.
+  useEffect(() => {
+    if (!push.notice) return
+    showToast('Notifications', push.notice)
+    push.dismissNotice()
+  }, [push.notice, push.dismissNotice])
   const navigate = useNavigate()
   const [showWipe, setShowWipe] = useState(false)
   const [showAccount, setShowAccount] = useState(false)
   const [wipeConfirm, setWipeConfirm] = useState('')
   const [wiping, setWiping] = useState(false)
   const [wipeError, setWipeError] = useState('')
-  const [toasts, setToasts] = useState<Toast[]>([])
   // User gesture unlock for in-app sound: browsers block AudioContext until
   // the user interacts. The first pointer interaction arms the chime so later
   // push toasts can beep; closed-tab delivery still beeps via the OS.
@@ -90,41 +97,64 @@ export default function Layout() {
   const [approvalCount, setApprovalCount] = useState<number | null>(null)
   const [lowStockCount, setLowStockCount] = useState<number | null>(null)
   // Durable inbox bell (shared `notifications` table, scoped to this user).
+  // Unread rows only — acknowledged rows are deleted from the DB.
   const [notifUnread, setNotifUnread] = useState(0)
   const [showNotifs, setShowNotifs] = useState(false)
   const [notifs, setNotifs] = useState<AppNotification[]>([])
   const [notifLoading, setNotifLoading] = useState(false)
+  // Bell anchor for the ported popup: positioned from the button's rect so the
+  // panel can live at the body level (always above page content, e.g. Approvals).
+  const bellRef = useRef<HTMLButtonElement | null>(null)
+  const [notifPanel, setNotifPanel] = useState<{ right: number; top: number } | null>(null)
+
+  const loadBadges = useCallback(async () => {
+    try {
+      const counts = await api.reorderCounts().catch(() => ({ counts: { pending: 0, processed: 0, fulfilled: 0, cancelled: 0 } }))
+      // Pending + Processing (not Fulfilled) = attention needed on the Reorder list button.
+      // Fulfilled lists are already received and don't need a badge; cancelled lists
+      // leave the set entirely.
+      const attention = counts.counts.pending + counts.counts.processed
+      setReorderCount(attention > 0 ? attention : null)
+      const [approvals, lowStock, unread] = await Promise.all([
+        api.approvals('pending').catch(() => ({ approvals: [] })),
+        api.lowStock().catch(() => ({ products: [] })),
+        api.unreadCount().catch(() => ({ unread_count: 0 })),
+      ])
+      setApprovalCount(approvals.approvals.length)
+      setLowStockCount(lowStock.products.length)
+      setNotifUnread(unread.unread_count)
+    } catch {
+      /* offline or forbidden — leave badges hidden */
+    }
+  }, [])
 
   useEffect(() => {
-    let cancelled = false
-    async function loadBadges() {
-      try {
-        const counts = await api.reorderCounts().catch(() => ({ counts: { pending: 0, processed: 0, fulfilled: 0, cancelled: 0 } }))
-        if (cancelled) return
-        // Pending + Processing (not Fulfilled) = attention needed on the Reorder list button.
-        // Fulfilled lists are already received and don't need a badge; cancelled lists
-        // leave the set entirely.
-        const attention = counts.counts.pending + counts.counts.processed
-        setReorderCount(attention > 0 ? attention : null)
-        const [approvals, lowStock, unread] = await Promise.all([
-          api.approvals('pending').catch(() => ({ approvals: [] })),
-          api.lowStock().catch(() => ({ products: [] })),
-          api.unreadCount().catch(() => ({ unread_count: 0 })),
-        ])
-        if (cancelled) return
-        setApprovalCount(approvals.approvals.length)
-        setLowStockCount(lowStock.products.length)
-        setNotifUnread(unread.unread_count)
-      } catch {
-        /* offline or forbidden — leave badges hidden */
-      }
+    void loadBadges()
+    // 30s refresh stays as the fallback for when the SSE stream is unavailable.
+    const id = setInterval(() => { void loadBadges() }, 30000)
+    return () => clearInterval(id)
+  }, [loadBadges])
+
+  // Re-read the inbox list (used when the bell panel is open and a new row lands).
+  const refreshNotifs = useCallback(async () => {
+    try {
+      const res = await api.notifications()
+      setNotifs(res.notifications)
+      setNotifUnread(res.unread_count)
+    } catch {
+      /* offline — keep whatever we had */
     }
-    loadBadges()
-    // 30s refresh keeps counts fresh without hammering the API; push toasts
-    // trigger an immediate recount for near-real-time feel.
-    const id = setInterval(loadBadges, 30000)
-    return () => { cancelled = true; clearInterval(id) }
   }, [])
+  const showNotifsRef = useRef(false)
+  useEffect(() => { showNotifsRef.current = showNotifs }, [showNotifs])
+
+  // Live updates (Workstream D): one EventSource drives an instant badge recount
+  // plus the matching targeted refetch — no page waits on the 30s poll.
+  useEvents((type) => {
+    if (type === 'ready') return
+    void loadBadges()
+    if (type === 'notification.created' && showNotifsRef.current) void refreshNotifs()
+  })
 
   // In-app toast + chime when a push arrives (e.g. a POS sale) while the
   // dashboard is open. The chime only plays after a user gesture has armed
@@ -134,13 +164,12 @@ export default function Layout() {
       const payload = e.data?.payload
       if (e.data?.type !== 'PUSH' || !payload) return
       const isSale = payload.receiptNo || payload.title?.includes('Sale')
-      const t: Toast = { id: Date.now(), title: payload.title || 'Spiro', body: payload.body || '' }
-      setToasts((prev) => [...prev.slice(-2), t])
+      // Toasts live in the shared host (Toaster.tsx) — same look/behaviour.
+      showToast(payload.title || 'Spiro', payload.body || '')
       if (audioArmed.current) playPushChime()
       // A push always means a fresh inbox row landed — recount immediately.
       void api.unreadCount().then((r) => setNotifUnread(r.unread_count)).catch(() => {})
       if (isSale) console.log(`[sale] ${payload.receiptNo || ''} ${ugx(Number(payload.total) || 0)} via ${payload.paymentMethod || '—'}`)
-      setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== t.id)), 8000)
     }
     navigator.serviceWorker?.addEventListener('message', onMessage)
     return () => navigator.serviceWorker?.removeEventListener('message', onMessage)
@@ -151,11 +180,15 @@ export default function Layout() {
     const next = !showNotifs
     setShowNotifs(next)
     if (!next) return
+    // Anchor the ported panel to the bell's viewport rect (right/below).
+    const r = bellRef.current?.getBoundingClientRect()
+    if (r) setNotifPanel({ right: Math.max(8, Math.round(window.innerWidth - r.right)), top: Math.round(r.bottom + 8) })
     setNotifLoading(true)
     try {
-      const r = await api.notifications()
-      setNotifs(r.notifications)
-      setNotifUnread(r.unread_count)
+      // Server returns unread rows only.
+      const res = await api.notifications()
+      setNotifs(res.notifications)
+      setNotifUnread(res.unread_count)
     } catch {
       /* offline — keep whatever we had */
     }
@@ -163,20 +196,20 @@ export default function Layout() {
   }
 
   async function clickNotif(n: AppNotification) {
-    if (!n.read_at) {
-      setNotifs((prev) => prev.map((x) => (x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x)))
-      setNotifUnread((c) => Math.max(0, c - 1))
-      try { await api.markNotificationRead(n.id) } catch { /* next poll reconciles */ }
-    }
+    // Acknowledging deletes the row from the database (container is unread-only).
+    setNotifs((prev) => prev.filter((x) => x.id !== n.id))
+    setNotifUnread((c) => Math.max(0, c - 1))
     setShowNotifs(false)
+    try { await api.deleteNotification(n.id) } catch { /* next poll reconciles */ }
     if (n.url) navigate(n.url)
   }
 
-  async function readAllNotifs() {
-    const now = new Date().toISOString()
-    setNotifs((prev) => prev.map((x) => (x.read_at ? x : { ...x, read_at: now })))
+  async function clearNotifs() {
+    // Purge every row for this user — the list empties for real, not just visually.
+    setNotifs([])
     setNotifUnread(0)
-    try { await api.markAllNotificationsRead() } catch { /* non-fatal */ }
+    try { await api.clearNotifications() } catch { /* non-fatal */ }
+    showToast('Notifications cleared')
   }
 
   async function doWipe() {
@@ -274,18 +307,21 @@ export default function Layout() {
         </nav>
 
         <div className="p-3 border-t border-slate-800/70 space-y-2">
+          {/* Push subscribes itself on load (Workstream B) — no button to chase.
+              This is a passive status line only. */}
           {push.state === 'subscribed' ? (
             <div className="flex items-center gap-2 px-3 py-2 text-xs text-brand-300">
               <span className="h-2 w-2 rounded-full bg-brand-400 animate-pulse" />
               Sale alerts on
             </div>
           ) : (
-            <>
-              <button onClick={() => void push.enable()} disabled={push.busy || push.state === 'unsupported'} className="btn-ghost w-full text-xs">
-                {push.busy ? 'Enabling…' : push.state === 'unsupported' ? '🔔 Alerts not supported' : '🔔 Enable alerts'}
-              </button>
-              {push.error && <p className="px-1 text-[11px] leading-snug text-red-400">{push.error}</p>}
-            </>
+            <div className="px-3 py-2 text-xs text-slate-500">
+              {push.state === 'unsupported'
+                ? '🔕 Alerts not supported on this browser'
+                : push.state === 'denied'
+                  ? '🔕 Alerts blocked in the browser'
+                  : '🔔 Alerts start automatically'}
+            </div>
           )}
           {/* DEV ONLY — remove before production */}
           <button
@@ -324,6 +360,7 @@ export default function Layout() {
             <div className="relative">
               <button
                 type="button"
+                ref={bellRef}
                 onClick={() => void openNotifs()}
                 title={notifUnread > 0 ? `${notifUnread} unread notification${notifUnread === 1 ? '' : 's'}` : 'Notifications'}
                 aria-label="Notifications"
@@ -338,47 +375,57 @@ export default function Layout() {
                   </span>
                 )}
               </button>
-              {showNotifs && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setShowNotifs(false)} />
-                  <div className="absolute right-0 top-full mt-2 w-[300px] max-h-[70vh] overflow-y-auto card p-2 z-50 shadow-2xl">
-                    <div className="flex items-center justify-between px-2 py-1.5">
-                      <span className="text-xs font-semibold text-white uppercase tracking-wider">Notifications</span>
-                      <button type="button" className="text-[11px] text-brand-300 hover:text-brand-200" onClick={() => void readAllNotifs()}>
-                        Mark all read
+            </div>
+
+            {/* Inbox popup — portaled to <body> so it always floats above page
+                content (e.g. the Approvals list) regardless of local stacking
+                contexts. Unread rows only; "Clear all" purges them from the DB. */}
+            {showNotifs && notifPanel && createPortal(
+              <>
+                <div className="fixed inset-0 z-[90]" onClick={() => setShowNotifs(false)} />
+                <div
+                  className="fixed w-[300px] max-h-[70vh] overflow-y-auto card p-2 z-[100] shadow-2xl"
+                  style={{ right: notifPanel.right, top: notifPanel.top }}
+                >
+                  <div className="flex items-center justify-between px-2 py-1.5">
+                    <span className="text-xs font-semibold text-white uppercase tracking-wider">Notifications</span>
+                    {notifs.length > 0 && (
+                      <button type="button" className="text-[11px] text-brand-300 hover:text-brand-200" onClick={() => void clearNotifs()}>
+                        Clear all
                       </button>
-                    </div>
-                    {notifLoading ? (
-                      <p className="text-xs text-slate-500 px-2 py-3">Loading…</p>
-                    ) : notifs.length === 0 ? (
-                      <p className="text-xs text-slate-500 px-2 py-3">Nothing yet — sales, approvals, reservations and team changes land here.</p>
-                    ) : (
-                      <div className="space-y-1">
-                        {notifs.map((n) => (
-                          <button
-                            key={n.id}
-                            type="button"
-                            onClick={() => void clickNotif(n)}
-                            className={cn('w-full text-left rounded-lg px-2.5 py-2 transition', n.read_at ? 'opacity-60' : 'bg-brand-500/10 hover:bg-brand-500/20')}
-                          >
-                            <div className="flex items-start gap-2">
-                              {!n.read_at && <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-400" />}
-                              <div className="min-w-0">
-                                <div className="text-xs font-semibold text-white truncate">{n.title}</div>
-                                <div className="text-[11px] text-slate-400 leading-snug">{n.body}</div>
-                                <div className="text-[10px] text-slate-600 mt-0.5">
-                                  {new Date(n.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                                </div>
-                              </div>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
                     )}
                   </div>
-                </>
-              )}
-            </div>
+                  {notifLoading ? (
+                    <p className="text-xs text-slate-500 px-2 py-3">Loading…</p>
+                  ) : notifs.length === 0 ? (
+                    <p className="text-xs text-slate-500 px-2 py-3">Nothing yet — sales, approvals, reservations and team changes land here.</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {notifs.map((n) => (
+                        <button
+                          key={n.id}
+                          type="button"
+                          onClick={() => void clickNotif(n)}
+                          className="w-full text-left rounded-lg px-2.5 py-2 transition bg-brand-500/10 hover:bg-brand-500/20"
+                        >
+                          <div className="flex items-start gap-2">
+                            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-400" />
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold text-white truncate">{n.title}</div>
+                              <div className="text-[11px] text-slate-400 leading-snug">{n.body}</div>
+                              <div className="text-[10px] text-slate-600 mt-0.5">
+                                {new Date(n.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>,
+              document.body,
+            )}
             <div className="text-right">
               <div className="text-sm font-semibold text-white">{user?.full_name}</div>
               <div className="text-[11px] text-slate-500 capitalize">{user?.role}</div>
@@ -391,15 +438,8 @@ export default function Layout() {
         </main>
       </div>
 
-      {/* Sale / push toasts */}
-      <div className="fixed bottom-4 left-4 right-4 sm:left-auto z-[60] space-y-2 sm:w-80">
-        {toasts.map((t) => (
-          <div key={t.id} className="card p-4 border-brand-500/40 bg-[#12161d] shadow-xl animate-pulse">
-            <div className="text-sm font-semibold text-white">{t.title}</div>
-            <div className="text-xs text-slate-400 mt-0.5">{t.body}</div>
-          </div>
-        ))}
-      </div>
+      {/* Sale / push toasts (shared host — see Toaster.tsx) */}
+      <ToastHost />
 
       {/* Account popup (logo click) */}
       {showAccount && (

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api } from '../lib/api'
+import { api, getStoredUser } from '../lib/api'
 import { compactUgx, dateTime, num, ugx } from '../lib/format'
 import type { Product, StockMovement } from '../lib/types'
 import { EmptyState, PageHeader, Spinner, stockStatusMeta } from '../components/ui'
+import { showToast } from '../components/Toaster'
 import { cn } from '../lib/cn'
 import { usePageSize } from '../lib/usePageSize'
 
@@ -19,6 +20,11 @@ export default function InventoryPage() {
   const [movements, setMovements] = useState<StockMovement[] | null>(null)
   const [error, setError] = useState('')
   const [detail, setDetail] = useState<Product | null>(null)
+  // Product delete (admin-only): two-step confirm, with a Deactivate fallback
+  // when the SKU has sales history (server answers 409 { can_deactivate }).
+  const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+  const isAdmin = (getStoredUser() as { role?: string } | null)?.role === 'admin'
   const [page, setPage] = useState(1)
   const pageSize = usePageSize()
 
@@ -81,6 +87,42 @@ export default function InventoryPage() {
     setAdjusting(null)
     const r = await api.movements(p.id)
     setMovements(r.movements)
+  }
+
+  // Hard delete; a 409 means the product appears in sales history — the UI
+  // then offers Deactivate so no financial record is ever orphaned.
+  async function deleteDetail() {
+    if (!detail) return
+    setDeleteError('')
+    try {
+      await api.deleteProduct(detail.id)
+      showToast('Product deleted', detail.name)
+      setDetail(null)
+      setDeleteConfirm(false)
+      load()
+    } catch (err) {
+      const status = (err as { status?: number }).status
+      setDeleteError(
+        status === 409
+          ? 'Has sales history — deactivate it instead of deleting.'
+          : err instanceof Error ? err.message : 'Delete failed',
+      )
+    }
+  }
+
+  // Soft delete: hidden from the POS + admin catalogs, history intact.
+  async function deactivateDetail() {
+    if (!detail) return
+    setDeleteError('')
+    try {
+      await api.deactivateProduct(detail.id)
+      showToast('Product deactivated', `${detail.name} is now hidden from the catalog`)
+      setDetail(null)
+      setDeleteConfirm(false)
+      load()
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Deactivate failed')
+    }
   }
 
   return (
@@ -253,6 +295,45 @@ export default function InventoryPage() {
               </div>
               <Info label="Last updated" value={dateTime(detail.updated_at)} />
             </div>
+
+            {/* Admin-only delete: confirm step, plus the Deactivate escape
+                hatch when the product has sales history (409 from the server). */}
+            {isAdmin && (
+              <div className="border-t border-slate-800 pt-3 mt-6 mb-3 flex flex-wrap items-center gap-2">
+                {!deleteConfirm ? (
+                  <button
+                    className="btn-danger text-xs"
+                    onClick={() => { setDeleteConfirm(true); setDeleteError('') }}
+                  >
+                    Delete product
+                  </button>
+                ) : (
+                  <>
+                    <span className="text-xs text-slate-400 mr-auto">Delete “{detail.name}” permanently?</span>
+                    <button
+                      className="btn-ghost text-xs"
+                      onClick={() => { setDeleteConfirm(false); setDeleteError('') }}
+                    >
+                      No, keep
+                    </button>
+                    <button className="btn-danger text-xs" onClick={() => void deleteDetail()}>
+                      Yes, delete
+                    </button>
+                  </>
+                )}
+                {deleteConfirm && deleteError && (
+                  <>
+                    <button
+                      className="text-xs px-3 py-2 rounded-lg bg-orange-500/15 text-orange-300 border border-orange-500/40 hover:bg-orange-500/25 transition"
+                      onClick={() => void deactivateDetail()}
+                    >
+                      Deactivate instead
+                    </button>
+                    <span className="w-full text-xs text-orange-300">{deleteError}</span>
+                  </>
+                )}
+              </div>
+            )}
 
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button className="btn-ghost w-full sm:w-auto" onClick={() => showMovements(detail)}>Movement history</button>

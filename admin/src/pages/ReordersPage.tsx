@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api } from '../lib/api'
+import { api, getStoredUser } from '../lib/api'
 import { compactUgx, dateOnly, dateTime, num, timeAgo, ugx } from '../lib/format'
-import type { Product, PurchasingRecord } from '../lib/types'
+import type { Product, PurchasingListItem, PurchasingRecord } from '../lib/types'
 import { EmptyState, PageHeader, Spinner, StockChip } from '../components/ui'
+import { showToast } from '../components/Toaster'
 import { Field, Modal } from './InventoryPage'
 import ReceiveStockModal from '../components/ReceiveStockModal'
 import { PdfWriter } from '../lib/pdf'
@@ -220,6 +221,11 @@ export default function ReordersPage() {
   const [statusBusy, setStatusBusy] = useState(false)
   // Reorder list currently being received (fulfilled) via the receive-stock modal.
   const [receiveFor, setReceiveFor] = useState<PurchasingRecord | null>(null)
+  // Reorder list open in the edit sheet (admin-only, pending/processing only).
+  const [editing, setEditing] = useState<PurchasingRecord | null>(null)
+  // Cancel is destructive + admin-only (D1): two-step confirm before the PATCH.
+  const [cancelConfirm, setCancelConfirm] = useState(false)
+  const isAdmin = (getStoredUser() as { role?: string } | null)?.role === 'admin'
   const [flash, setFlash] = useState('')
 
   /** Advance an open reorder list's status from the detail modal (processed). */
@@ -231,6 +237,25 @@ export default function ReordersPage() {
       await Promise.all([load(), loadCounts()])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update status')
+    } finally {
+      setStatusBusy(false)
+    }
+  }
+
+  /** Cancel a list (admin-only) — retires it without touching stock history. */
+  const cancelList = async (r: PurchasingRecord) => {
+    setStatusBusy(true)
+    setError('')
+    try {
+      await api.updateReorderStatus(r.id, 'cancelled')
+      showToast('Reorder list cancelled', r.title || 'The list was retired')
+      setCancelConfirm(false)
+      setDetail(null)
+      await Promise.all([load(), loadCounts()])
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to cancel the list'
+      setError(msg)
+      showToast('Could not cancel list', msg)
     } finally {
       setStatusBusy(false)
     }
@@ -492,6 +517,16 @@ export default function ReordersPage() {
               <span className="mr-auto text-xs text-slate-500">
                 Status: <span className="text-slate-300 font-medium">{detail.status || 'pending'}</span>
               </span>
+              {/* Admin-only: rework the list (title, notes, quantities, lines). */}
+              {isAdmin && (
+                <button
+                  className="btn-ghost"
+                  disabled={statusBusy}
+                  onClick={() => { setEditing(detail); setError(''); setCancelConfirm(false) }}
+                >
+                  Edit list
+                </button>
+              )}
               {/* "Start processing" only makes sense while the list is still pending. */}
               {detail.status === 'pending' && (
                 <button
@@ -511,7 +546,29 @@ export default function ReordersPage() {
                   Receive stock
                 </button>
               )}
+              {/* Cancel retires the list — admin-only (D1), always confirmed. */}
+              {isAdmin && !cancelConfirm && (
+                <button
+                  className="btn-danger"
+                  disabled={statusBusy}
+                  onClick={() => { setCancelConfirm(true); setError('') }}
+                >
+                  Cancel list
+                </button>
+              )}
               {statusBusy && <span className="text-xs text-slate-500">Updating…</span>}
+            </div>
+          )}
+          {/* Confirmation strip: the destructive action never fires on a single tap. */}
+          {tab === 'reorders' && isAdmin && cancelConfirm && detail.status !== 'fulfilled' && detail.status !== 'cancelled' && (
+            <div className="flex flex-wrap items-center justify-end gap-2 mt-3">
+              <span className="mr-auto text-xs text-slate-400">Cancel “{detail.title}”? It will stop counting toward pending work.</span>
+              <button className="btn-ghost text-xs" disabled={statusBusy} onClick={() => setCancelConfirm(false)}>
+                No, keep it
+              </button>
+              <button className="btn-danger text-xs" disabled={statusBusy} onClick={() => void cancelList(detail)}>
+                Yes, cancel list
+              </button>
             </div>
           )}
         </Modal>
@@ -527,6 +584,13 @@ export default function ReordersPage() {
             load()
             loadCounts()
           }}
+        />
+      )}
+      {editing && (
+        <ReorderEditModal
+          record={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); setDetail(null); load(); loadCounts() }}
         />
       )}
     </div>
@@ -733,6 +797,211 @@ function ReorderForm({ products, onClose, onSaved }: { products: Product[]; onCl
         <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
           <button type="button" className="btn-ghost w-full sm:w-auto" onClick={onClose}>Cancel</button>
           <button className="btn-primary w-full sm:w-auto" disabled={busy}>{busy ? 'Saving…' : 'Save reorder list'}</button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+
+/** Admin-only edit sheet for a pending/processing reorder list: title, notes and
+ *  per-line quantity/unit cost, with add/remove line. Mirrors ReorderForm's
+ *  validation so a well-formed save is never rejected server-side. */
+function ReorderEditModal({ record, onClose, onSaved }: { record: PurchasingRecord; onClose: () => void; onSaved: () => void }) {
+  const [title, setTitle] = useState(record.title || '')
+  const [notes, setNotes] = useState(record.notes || '')
+  const [lines, setLines] = useState<Line[]>(() => record.items.map((i) => ({
+    product_id: i.product_id ?? null,
+    sku: i.sku,
+    name: i.name,
+    qty: String(i.qty),
+    unit_cost: Number(i.unit_cost) || 0,
+    reorder_level: i.reorder_level,
+    new_product: i.new_product,
+  })))
+  const [products, setProducts] = useState<Product[]>([])
+  const [q, setQ] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    api.purchasingCatalog().then((r) => setProducts(r.products)).catch(() => setProducts([]))
+  }, [])
+
+  // Lines are keyed by product id, or `new:<sku>` for not-yet-created products.
+  const keyOf = (l: Line) => l.product_id || `new:${l.sku}`
+
+  /** Line total — always derived (qty × unit cost), never typed: the read-only
+   *  field on each row mirrors it, exactly like the detail modal and the PDF.
+   *  The quantity is floored and clamped at zero, so an in-progress edit can
+   *  never display a total the save would reject (or a negative one). */
+  const lineTotal = (l: Line) => Math.max(0, Math.floor(Number(l.qty) || 0)) * (Number(l.unit_cost) || 0)
+  const linesValue = lines.reduce((s, l) => s + lineTotal(l), 0)
+
+  const matches = useMemo(() => {
+    const s = q.trim().toLowerCase()
+    return products
+      .filter((p) => !lines.some((l) => l.product_id === p.id))
+      .filter((p) => !s || p.name.toLowerCase().includes(s) || p.sku.toLowerCase().includes(s))
+      .slice(0, 8)
+  }, [products, q, lines])
+
+  const patchLine = (key: string, patch: Partial<Line>) =>
+    setLines((v) => v.map((x) => (keyOf(x) === key ? { ...x, ...patch } : x)))
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    setError('')
+    if (!title.trim()) {
+      setError('Enter a title for this list')
+      return
+    }
+    if (lines.length === 0) {
+      setError('A list needs at least one item')
+      return
+    }
+    const items: PurchasingListItem[] = []
+    for (const l of lines) {
+      const n = Math.floor(Number(l.qty))
+      if (!Number.isInteger(n) || n < 1) {
+        setError(`Enter a valid quantity for ${l.name}`)
+        return
+      }
+      items.push({
+        product_id: l.product_id ?? null,
+        sku: l.sku,
+        name: l.name,
+        qty: n,
+        unit_cost: Number(l.unit_cost) || 0,
+        ...(l.reorder_level != null ? { reorder_level: l.reorder_level } : {}),
+        ...(l.new_product ? { new_product: l.new_product } : {}),
+      })
+    }
+    setBusy(true)
+    try {
+      await api.updateReorder(record.id, { title: title.trim(), notes: notes.trim(), items })
+      showToast('Reorder list updated', title.trim())
+      onSaved()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title={`Edit — ${record.title || 'Reorder list'}`} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3">
+        <Field label="Title">
+          <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={500} />
+        </Field>
+        <Field label="Notes">
+          <textarea
+            className="input"
+            rows={2}
+            maxLength={500}
+            placeholder="Optional"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </Field>
+
+
+        <div className="border-t border-slate-800/70 pt-3">
+          <div className="text-xs font-semibold text-slate-300 mb-2">Items ({lines.length})</div>
+          <div className="space-y-2 max-h-52 overflow-y-auto">
+            {lines.map((l) => (
+              <div key={keyOf(l)} className="flex flex-wrap items-center gap-2 border border-slate-700 rounded-xl px-2.5 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-white truncate">{l.name}</div>
+                  <div className="text-[11px] text-slate-500 font-mono">{l.sku}</div>
+                </div>
+                <input
+                  className="input w-20"
+                  type="number"
+                  min={1}
+                  title="Quantity"
+                  value={l.qty}
+                  onChange={(e) => patchLine(keyOf(l), { qty: e.target.value })}
+                />
+                <input
+                  className="input w-28"
+                  type="number"
+                  min={0}
+                  title="Unit cost (UGX)"
+                  value={l.unit_cost ?? 0}
+                  onChange={(e) => patchLine(keyOf(l), { unit_cost: Number(e.target.value) || 0 })}
+                />
+                {/* Line total — read-only: qty × unit cost, recomputed on every
+                    keystroke in either field (the server derives the same value
+                    from the two fields on save, so it is never submitted). */}
+                <input
+                  className="input w-28 px-2 text-xs text-right tabular-nums"
+                  type="text"
+                  readOnly
+                  tabIndex={-1}
+                  title="Line total (auto) — qty × unit cost"
+                  value={ugx(lineTotal(l))}
+                />
+                <button
+                  type="button"
+                  className="text-slate-600 hover:text-red-400 text-xs"
+                  title="Remove line"
+                  onClick={() => setLines((v) => v.filter((x) => keyOf(x) !== keyOf(l)))}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* Read-only list total — the same figure the table's Est. value
+              column and the detail modal show, kept in step with the lines. */}
+          {lines.length > 0 && (
+            <div className="flex justify-between text-xs text-slate-400 mt-2">
+              <span>Est. value ({lines.length} line{lines.length === 1 ? '' : 's'})</span>
+              <span className="text-white font-semibold">{ugx(linesValue)}</span>
+            </div>
+          )}
+
+          <input
+            className="input mt-2"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Add product — search by name or SKU"
+          />
+          {q.trim() !== '' && (
+            <div className="mt-1 space-y-1 max-h-40 overflow-y-auto">
+              {matches.length === 0 && <div className="text-xs text-slate-600 px-1 py-2">No match.</div>}
+              {matches.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-800/60 text-sm text-slate-200"
+                  onClick={() => {
+                    setLines((v) => [...v, {
+                      product_id: p.id,
+                      sku: p.sku,
+                      name: p.name,
+                      qty: String(Math.max(1, (Number(p.reorder_level) || 0) - Number(p.stock_qty) + 1)),
+                      unit_cost: Number(p.cost_price) || 0,
+                    }])
+                    setQ('')
+                  }}
+                >
+                  {p.name} <span className="text-[11px] text-slate-500 font-mono">{p.sku}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {error && <p className="text-sm text-red-400">{error}</p>}
+        <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+          <button type="button" className="btn-ghost w-full sm:w-auto" onClick={onClose}>Cancel</button>
+          <button className="btn-primary w-full sm:w-auto" disabled={busy}>
+            {busy ? 'Saving…' : 'Save changes'}
+          </button>
         </div>
       </form>
     </Modal>

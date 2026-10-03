@@ -16,10 +16,20 @@ export function PeriodPicker({
   period,
   onChange,
   variant = 'buttons',
+  panelClassName = '',
 }: {
   period: Period
   onChange: (p: Period) => void
   variant?: 'buttons' | 'select'
+  /**
+   * Extra classes for the select variant's custom panel. The default inline
+   * panel uses a negative right margin that assumes the picker sits in a
+   * half-row column (Sales page). Consumers whose picker lives in a narrow
+   * column (Overview 220px, Team 260px) pass an absolute class string and
+   * mark their surrounding card `relative` — the panel then spans the whole
+   * card instead of being squeezed by the column.
+   */
+  panelClassName?: string
 }) {
   const [showCustom, setShowCustom] = useState(false)
   const [customDays, setCustomDays] = useState('')
@@ -58,11 +68,14 @@ export function PeriodPicker({
         </select>
 
         {customOpen && (
-          /* Spans the full filter-card row: left edge matches the period
-             picker's margin, and the negative right margin (own width + the
-             12px column gap) keeps the panel inside the card instead of
-             being squeezed into the half-width column. */
-          <div className="mt-3 -mr-[calc(100%_+_12px)] flex flex-wrap items-end gap-2">
+          /* Default: spans the full filter-card row (left edge matches the
+             period picker's margin; the negative right margin = own width +
+             the 12px column gap keeps the panel inside the card) — works while
+             the picker column is about half the row (Sales page).
+             `panelClassName` consumers (Overview, Team) replace the inline
+             positioning entirely and anchor the panel absolutely against their
+             `relative` card, so the panel never inherits the narrow column. */
+          <div className={`flex flex-wrap items-end gap-2 ${panelClassName || 'mt-3 -mr-[calc(100%_+_12px)]'}`}>
             {/* Width is set on the wrapper: the Field label is content-sized,
                 so the input's percentage must resolve against a definite
                 wrapper (half the panel = the picker column above). */}

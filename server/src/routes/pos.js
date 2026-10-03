@@ -4,6 +4,7 @@ const { requireAuth } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { normalizeRole, hasPermission } = require('../permissions/catalog');
 const { audit } = require('../middleware/audit');
+const { emit } = require('./events');
 const { recordSale } = require('../services/sales');
 const {
   listReservations,
@@ -38,9 +39,9 @@ router.get('/catalog', async (req, res) => {
   });
 });
 
-/** Update a product — requires the `product_edit` grant (or inventory_receive for
- *  creating new SKUs inline, which is part of the receive flow). */
-router.put('/products/:id', requirePermission('product_edit'), async (req, res) => {
+/** Update a product — requires the `inventory_adjust` grant (Edit Products was
+ *  merged into Adjust Inventory; `product_edit` remains as a legacy any-of). */
+router.put('/products/:id', requirePermission(['inventory_adjust', 'product_edit']), async (req, res) => {
   try {
     const before = await one(`SELECT * FROM products WHERE id = $1`, [req.params.id]);
     if (!before) return res.status(404).json({ error: 'Product not found' });
@@ -54,6 +55,7 @@ router.put('/products/:id', requirePermission('product_edit'), async (req, res) 
        Number(p.reorder_level) || 10, p.active !== false]
     );
     await audit({ userId: req.user.id, action: 'update_product', entity: 'product', entityId: rec.id, oldValue: before, newValue: rec });
+    emit('product.updated', { id: rec.id, action: 'updated' });
     res.json({ product: rec });
   } catch (err) {
     console.error('[pos/products/:id]', err);
@@ -80,6 +82,7 @@ router.post('/inventory/adjust', requirePermission('inventory_adjust'), async (r
   );
   await audit({ userId: req.user.id, action: 'stock_adjustment', entity: 'product', entityId: product_id,
     oldValue: { stock_qty: product.stock_qty }, newValue: { stock_qty: newQty }, meta: { note } });
+  emit('stock.changed', { reason: 'adjustment', productId: product_id, stockQty: newQty });
   res.status(201).json({ movement: mv, stock_qty: newQty });
 });
 
@@ -357,6 +360,10 @@ router.post('/credit-sales/:id/finalize', requirePermission('credit_finalize'), 
       device_id: (req.body || {}).device_id || null,
       client_txn_id: (req.body || {}).client_txn_id || null,
     });
+    if (!result.duplicate) {
+      emit('sale.created', { saleId: result.sale && result.sale.id, receiptNo: result.sale && result.sale.receipt_no, credit: true });
+      emit('stock.changed', { reason: 'credit_finalize', saleId: result.sale && result.sale.id });
+    }
     res.status(result.duplicate ? 200 : 201).json({ ok: true, duplicate: result.duplicate, sale: result.sale });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
