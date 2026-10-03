@@ -31,6 +31,25 @@ export function dateOnly(iso: string | null | undefined): string {
   return new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Africa/Kampala' })
 }
 
+/**
+ * Full current business day as UTC ISO instants, anchored to the start of the
+ * day in the app's timezone (Africa/Kampala, UTC+3, no DST) — the *same* window
+ * the server `/today` endpoint and the `/reports/period` "Today" branch use.
+ * Use this instead of a rolling `days=1` so a "Today" filter starts at midnight
+ * of the current day and matches the dashboard exactly.
+ */
+export function todayWindow(ref = new Date()): { from: string; to: string } {
+  const K = 3 * 3600 * 1000
+  const wall = new Date(ref.getTime() + K) // instant as Kampala wall-clock (ms)
+  const y = wall.getUTCFullYear()
+  const mo = wall.getUTCMonth()
+  const d = wall.getUTCDate()
+  const start = new Date(Date.UTC(y, mo, d) - K) // Kampala 00:00 → UTC instant
+  // End of day (inclusive) for callers that use `<=`; 23:59:59.999 Kampala.
+  const end = new Date(start.getTime() + 86400000 - 1)
+  return { from: start.toISOString(), to: end.toISOString() }
+}
+
 /** Day + month only ("22 Sep") — the top line of the stacked mobile date cell. */
 export function dateShort(iso: string | null | undefined): string {
   if (!iso) return '—'

@@ -6,10 +6,22 @@ const router = express.Router();
 router.use(requireAuth);
 
 /**
- * Build the WHERE window for a report query.
- * Supports either explicit ISO dates (?from=2026-01-01&to=2026-12-31)
- * or a day count (?days=30). Caps at 2 years, defaulting to 30 days.
- * Returns { clause, params } where clause uses $1/$2 placeholders.
+ * Build the date window for a report query.
+ * Supports explicit ISO dates (?from=2026-01-01&to=2026-12-31) or a rolling
+ * day count (?days=30, default 30). Caps at 2 years.
+ *
+ * Returns { win, params }: `win(col)` builds a fully-qualified predicate on the
+ * caller's column (e.g. win('s.created_at')), so `created_at` is always bound
+ * to one table alias and can never be ambiguous in a JOIN. This replaces the
+ * old `TABLE.${clause}` pattern that triggered the /range 500: `cp.${clause}`
+ * expanded to `cp.created_at >= $1 AND created_at < $2`, where the second
+ * `created_at` was bare and ambiguous between credit_payments and sales
+ * (SQLSTATE 42702 / "column reference \"created_at\" is ambiguous").
+ *
+ * `to` is inclusive of its calendar day (`< ($2::date + interval '1 day')`)
+ * so a same-day window (Today) is never empty — matches the /period handler.
+ * `params` is always [fromISO, toISO] so every query in a request shares one
+ * consistent window.
  */
 function reportWindow(req) {
   const MAX_DAYS = 730; // 2 years
@@ -25,12 +37,15 @@ function reportWindow(req) {
     }
     params.push(from.toISOString());
     params.push(toSafe.toISOString());
-    return { clause: `created_at >= $1 AND created_at < $2`, params };
+    // `win(col)` qualifies BOTH bounds on the caller's column — safe in JOINs.
+    const win = (col) => `${col} >= $1 AND ${col} < ($2::date + interval '1 day')`;
+    return { win, params };
   }
 
   const days = Math.min(Math.max(Number(req.query.days) || 30, 1), MAX_DAYS);
   params.push(String(days));
-  return { clause: `created_at >= now() - ($1 || ' days')::interval`, params };
+  const win = (col) => `${col} >= now() - ($1 || ' days')::interval`;
+  return { win, params };
 }
 
 /** Today's performance across all metrics — the dashboard's default view */
@@ -219,9 +234,8 @@ router.get('/today/hourly', async (req, res) => {
 router.get('/range', async (req, res) => calendarQuery(req, res));
 
 async function calendarQuery(req, res) {
-  const win = reportWindow(req);
-  if (win.error) return res.status(400).json({ error: win.error });
-  const { clause, params } = win;
+  const { win, params, error } = reportWindow(req);
+  if (error) return res.status(400).json({ error });
 
   const kpi = await one(
     `SELECT count(*)::int AS sales_count,
@@ -229,21 +243,21 @@ async function calendarQuery(req, res) {
             COALESCE(sum(profit) FILTER (WHERE payment_method <> 'credit'),0) AS profit,
             COALESCE(avg(total) FILTER (WHERE payment_method <> 'credit'),0) AS avg_transaction
        FROM sales
-      WHERE ${clause} AND status='completed'`, params
+      WHERE ${win('created_at')} AND status='completed'`, params
   );
   // Settlements received inside the window — the credit half of revenue.
   const settlement = await one(
     `SELECT COALESCE(sum(cp.amount),0) AS revenue,
             COALESCE(sum(cp.amount * (s.profit / NULLIF(s.total,0))),0) AS profit
        FROM credit_payments cp JOIN sales s ON s.id = cp.sale_id
-      WHERE cp.${clause}`, params
+      WHERE ${win('cp.created_at')}`, params
   );
   const daily = await many(
     `SELECT date_trunc('day', created_at)::date AS day,
             COALESCE(sum(total) FILTER (WHERE payment_method <> 'credit'),0) AS revenue,
             COALESCE(sum(profit) FILTER (WHERE payment_method <> 'credit'),0) AS profit
        FROM sales
-      WHERE ${clause} AND status='completed'
+      WHERE ${win('created_at')} AND status='completed'
       GROUP BY day ORDER BY day`, params
   );
   const dailySettle = await many(
@@ -251,7 +265,7 @@ async function calendarQuery(req, res) {
             COALESCE(sum(cp.amount),0) AS revenue,
             COALESCE(sum(cp.amount * (s.profit / NULLIF(s.total,0))),0) AS profit
        FROM credit_payments cp JOIN sales s ON s.id = cp.sale_id
-      WHERE cp.${clause}
+      WHERE ${win('cp.created_at')}
       GROUP BY day ORDER BY day`, params
   );
   // Each day = product revenue + settlements received that day; `settlement`
@@ -266,11 +280,11 @@ async function calendarQuery(req, res) {
   }
   const bikesSold = await one(
     `SELECT count(*)::int AS n FROM sale_items si JOIN sales s ON s.id = si.sale_id
-      WHERE si.kind='bike' AND s.${clause}`, params
+      WHERE si.kind='bike' AND ${win('s.created_at')}`, params
   );
   const partsSold = await one(
     `SELECT COALESCE(sum(si.qty),0)::int AS n FROM sale_items si JOIN sales s ON s.id = si.sale_id
-      WHERE si.kind='part' AND s.${clause}`, params
+      WHERE si.kind='part' AND ${win('s.created_at')}`, params
   );
   // Outstanding debt is a point-in-time balance: all finalized credit sales
   // minus every settlement received (never windowed — it exists today).
@@ -302,9 +316,8 @@ async function calendarQuery(req, res) {
 
 /** Top products by revenue/profit/qty over a range */
 router.get('/top-products', async (req, res) => {
-  const win = reportWindow(req);
-  if (win.error) return res.status(400).json({ error: win.error });
-  const { clause, params } = win;
+  const { win, params, error } = reportWindow(req);
+  if (error) return res.status(400).json({ error });
   const order = ['revenue', 'profit', 'qty'].includes(req.query.order) ? req.query.order : 'revenue';
   const col = { revenue: 'revenue', profit: 'profit', qty: 'qty' }[order];
   const products = await many(
@@ -313,7 +326,7 @@ router.get('/top-products', async (req, res) => {
             COALESCE(sum(si.line_total),0) AS revenue,
             COALESCE(sum(si.line_total - (si.unit_cost * si.qty)),0) AS profit
        FROM sale_items si JOIN sales s ON s.id = si.sale_id
-      WHERE s.${clause}
+      WHERE ${win('s.created_at')}
       GROUP BY si.name
       ORDER BY ${col} DESC
       LIMIT 20`, params
@@ -323,13 +336,12 @@ router.get('/top-products', async (req, res) => {
 
 /** Payment mix over a range */
 router.get('/payments', async (req, res) => {
-  const win = reportWindow(req);
-  if (win.error) return res.status(400).json({ error: win.error });
-  const { clause, params } = win;
+  const { win, params, error } = reportWindow(req);
+  if (error) return res.status(400).json({ error });
   const payments = await many(
     `SELECT payment_method, COALESCE(sum(total),0) AS amount
        FROM sales
-      WHERE ${clause} AND status='completed'
+      WHERE ${win('created_at')} AND status='completed'
       GROUP BY payment_method ORDER BY amount DESC`, params
   );
   res.json({ payments });
@@ -337,15 +349,14 @@ router.get('/payments', async (req, res) => {
 
 /** Cashier leaderboard over a range */
 router.get('/cashiers', async (req, res) => {
-  const win = reportWindow(req);
-  if (win.error) return res.status(400).json({ error: win.error });
-  const { clause, params } = win;
+  const { win, params, error } = reportWindow(req);
+  if (error) return res.status(400).json({ error });
   const rows = await many(
     `SELECT u.id, u.full_name, count(s.id)::int AS sales_count,
             COALESCE(sum(s.total),0) AS revenue, COALESCE(sum(s.profit),0) AS profit,
             COALESCE(sum(s.discount),0) AS discounts
        FROM users u LEFT JOIN sales s ON s.cashier_id = u.id
-         AND s.${clause}
+          AND ${win('s.created_at')}
       WHERE u.role IN ('cashier', 'operator', 'manager')
       GROUP BY u.id ORDER BY revenue DESC`, params
   );
@@ -379,12 +390,29 @@ router.get('/period', async (req, res) => {
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
     return res.status(400).json({ error: 'Invalid from/to' });
   }
-  const days = Math.ceil((to - from) / 86400000);
+     const days = Math.ceil((to - from) / 86400000);
   if (days < 0) return res.status(400).json({ error: 'from must precede to' });
   if (days > MAX_DAYS) return res.status(400).json({ error: 'Range too long: maximum is 2 years' });
-  const params = [from.toISOString(), to.toISOString()];
-  // Same half-open convention as reportWindow so the PDF matches the screen.
-  const win = (col) => `${col} >= $1 AND ${col} < $2`;
+      let params = [from.toISOString(), to.toISOString()]; // `let`: cleared in the same-day branch below
+
+  // Same half-open convention as reportWindow (>= from, < to) so the PDF window
+  // matches the screen. BUT for a same-day "Today" window (from == to) that
+  // becomes `created_at >= today AND created_at < today` — an *empty* range —
+  // which is why the report has always come back as 0 transactions today.
+  // Anchor Today to the current business day (Africa/Kampala) midnight → midnight,
+  // i.e. the SAME window the /today dashboard uses, so Today is never empty and
+  // the report agrees with the overview. (Africa/Kampala is UTC+3 with no DST
+  // and matches the /today & /hourly endpoints exactly.)
+  const sameDay = from.toISOString().slice(0, 10) === to.toISOString().slice(0, 10);
+  const todayStart = `(date_trunc('day', now() AT TIME ZONE 'Africa/Kampala') AT TIME ZONE 'Africa/Kampala')`;
+  const win = sameDay
+    ? (col) => `${col} >= ${todayStart} AND ${col} < ${todayStart} + interval '1 day'`
+    : (col) => `${col} >= $1 AND ${col} < ($2::date + interval '1 day')`; // inclusive of the `to` day: resolveRange() sends a date-only `to` (midnight) meaning 'include the last day', but `< $2` alone drops that whole day (so 'Past 3 days' excluded Today). `($2::date + 1 day)` normalizes any `to` instant to its calendar-day boundary so the full `to` day is captured. Param count unchanged ($1/$2).
+  // Same-day "Today" embeds the Kampala-midnight window directly in the SQL
+  // (no $1/$2 placeholders), so it must bind an empty params array — otherwise
+  // pg throws "bind message supplies 2 params, statement requires 0" and the
+  // report returns 0 transactions. Multi-day keeps $1/$2 + `params` above.
+  if (sameDay) params = [];
 
   // ---- KPI -----------------------------------------------------------------
   const kpi = await one(

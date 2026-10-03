@@ -15,6 +15,7 @@ import { cn } from '../lib/cn'
 import { Badge, EmptyState, KpiCard, PageHeader, Spinner } from '../components/ui'
 import { Modal } from '../components/Modal'
 import { PeriodPicker } from '../components/PeriodPicker'
+import { Field } from './InventoryPage'
 
 const PIE_COLORS = ['#12b76a', '#0ea5e9', '#8b5cf6', '#f59e0b', '#ef4444']
 
@@ -177,26 +178,34 @@ export default function OverviewPage() {
         subtitle={period.id === 'today' ? new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : period.label}
       />
 
-      {/* Period filter (narrow) + Download Report for the selected period.
-          The card is `relative` so the picker's custom-range panel can anchor
-          to the card edges instead of the 220px column (see PeriodPicker). */}
-      <div className="card p-3 mb-4 flex items-center gap-3 relative">
-        <div className="w-[220px] shrink-0">
-          <PeriodPicker
-            period={period}
-            onChange={setPeriod}
-            variant="select"
-            panelClassName="absolute left-3 right-3 top-[calc(100%_+_8px)] z-40 bg-[#12161d] rounded-2xl p-3 shadow-2xl border border-slate-700/60"
-          />
+      {/* Period filter + Download Report — same layout as the Sales page:
+          a `card p-4 mb-4` wrapping a `flex flex-wrap gap-3` row with a labeled
+          Field around the select and the report button pinned right. The
+          custom-range panel renders inline below the select and pushes the
+          KPI/chart rows downward (never an overlay) — see PeriodPicker. */}
+      <div className="card p-4 mb-4">
+        {/* Row 1: period picker (capped) + Download Report, side by side. */}
+        <div className="flex flex-wrap gap-3">
+          <div className="flex-1 min-w-[150px]">
+            <Field label="Pick period">
+              <PeriodPicker
+                period={period}
+                onChange={setPeriod}
+                variant="select"
+              />
+            </Field>
+          </div>
+          <div className="flex items-end">
+            <button
+              className="btn-primary text-xs sm:ml-auto shrink-0"
+              onClick={() => void downloadReport()}
+              disabled={reportBusy}
+              title={`Download a PDF report for ${period.label}`}
+            >
+              {reportBusy ? 'Preparing…' : '⤓ Download Report'}
+            </button>
+          </div>
         </div>
-        <button
-          className="btn-primary text-xs ml-auto shrink-0"
-          onClick={() => void downloadReport()}
-          disabled={reportBusy}
-          title={`Download a PDF report for ${period.label}`}
-        >
-          {reportBusy ? 'Preparing…' : '⤓ Download Report'}
-        </button>
       </div>
 
       {/* KPI row — 2×2 at every breakpoint, period-aligned */}

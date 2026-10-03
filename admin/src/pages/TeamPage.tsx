@@ -336,26 +336,27 @@ export default function TeamPage() {
       </div>
 
       {/* Staff performance — relocated from Settings; period-filtered */}
-      {/* `relative` anchors the picker's custom-range panel to the whole card
-          (the picker column is capped at 260px — see PeriodPicker). */}
-      <section className="card p-5 mt-4 relative">
-        {/* Title on its own row so the picker (and its custom-range panel,
-            which spans the full card width) never gets boxed into a 208px
-            column — the same pattern the Overview filter uses. */}
+      {/* The custom-range panel renders inline below the select and pushes this
+          table downward (never an overlay) — see PeriodPicker. */}
+      <section className="card p-5 mt-4">
+        {/* Title on its own row. The picker's custom-range panel renders inline
+            below the select and pushes this table downward instead of floating
+            over it. */}
         <div className="mb-4">
           <h3 className="font-semibold text-white">Staff performance</h3>
         </div>
-        {/* Full-width relative wrapper: the select stays capped at 260px but
-            the custom-range panel anchors to this wrapper, so From/To/Apply
-            get the full card width instead of 260px. */}
-        <div className="relative w-full mb-4">
+        {/* Period filter — same layout as the Sales page: a labeled Field around
+            the select, capped at 260px on sm+, with the default inline (non-overlay)
+            Custom panel dropping below and pushing the staff table downward. */}
+        <div className="w-full mb-4">
           <div className="w-full sm:max-w-[260px]">
-            <PeriodPicker
-              period={period}
-              onChange={setPeriod}
-              variant="select"
-              panelClassName="absolute left-0 right-0 top-full mt-3 z-40 bg-[#12161d] rounded-2xl p-3 shadow-2xl border border-slate-700/60"
-            />
+            <Field label="Pick period">
+              <PeriodPicker
+                period={period}
+                onChange={setPeriod}
+                variant="select"
+              />
+            </Field>
           </div>
         </div>
         {cashiers === null ? (

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import { compactUgx, dateTime, num, PAYMENT_LABELS, timeAgo, ugx } from '../lib/format'
+import { compactUgx, dateTime, num, PAYMENT_LABELS, timeAgo, todayWindow, ugx } from '../lib/format'
 import { PERIODS } from '../lib/periods'
 import type { Period } from '../lib/periods'
 import type { Sale, SaleItem } from '../lib/types'
@@ -23,7 +23,13 @@ export default function SalesPage() {
   const load = useCallback(async () => {
     const params = new URLSearchParams()
     if (q) params.set('q', q)
-    if (period.from && period.to) {
+        if (period.id === 'today') {
+      // “Today” is the business day starting at midnight (not a rolling 24h),
+      // so it matches the dashboard cards and the printed report exactly.
+      const { from, to } = todayWindow()
+      params.set('from', from)
+      params.set('to', to)
+    } else if (period.from && period.to) {
       // pad `to` to the end of that day so the whole “to” date is included
       const to = new Date(`${period.to}T23:59:59`)
       params.set('from', new Date(`${period.from}T00:00:00`).toISOString())

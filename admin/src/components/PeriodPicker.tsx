@@ -21,13 +21,11 @@ export function PeriodPicker({
   period: Period
   onChange: (p: Period) => void
   variant?: 'buttons' | 'select'
-  /**
-   * Extra classes for the select variant's custom panel. The default inline
-   * panel uses a negative right margin that assumes the picker sits in a
-   * half-row column (Sales page). Consumers whose picker lives in a narrow
-   * column (Overview 220px, Team 260px) pass an absolute class string and
-   * mark their surrounding card `relative` — the panel then spans the whole
-   * card instead of being squeezed by the column.
+    /**
+   * Optional classes for the select variant's custom panel. The default panel
+   * is an inline (normal-flow) full-width block: it renders below the select and
+   * pushes sibling content down, never as an overlay. Pass classes for visual
+   * styling only (e.g. bg/border) — the layout always stays inline.
    */
   panelClassName?: string
 }) {
@@ -68,14 +66,12 @@ export function PeriodPicker({
         </select>
 
         {customOpen && (
-          /* Default: spans the full filter-card row (left edge matches the
-             period picker's margin; the negative right margin = own width +
-             the 12px column gap keeps the panel inside the card) — works while
-             the picker column is about half the row (Sales page).
-             `panelClassName` consumers (Overview, Team) replace the inline
-             positioning entirely and anchor the panel absolutely against their
-             `relative` card, so the panel never inherits the narrow column. */
-          <div className={`flex flex-wrap items-end gap-2 ${panelClassName || 'mt-3 -mr-[calc(100%_+_12px)]'}`}>
+          /* Inline (normal flow), never an overlay: the panel renders below the
+             select at the column's full width and pushes the rows beneath it
+             downward instead of floating over them. `panelClassName` adds only
+             visual styling (bg/border/shadow) — no absolute positioning, so
+             sibling KPI/chart/cashier content is never covered. */
+          <div className={`flex flex-wrap items-end gap-2 ${panelClassName || 'mt-3 w-full'}`}>
             {/* Width is set on the wrapper: the Field label is content-sized,
                 so the input's percentage must resolve against a definite
                 wrapper (half the panel = the picker column above). */}

@@ -6,10 +6,23 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      // main.tsx already calls registerSW() from 'virtual:pwa-register' itself,
+      // so do NOT also inject the auto-generated register snippet — otherwise the
+      // service worker is registered twice and the reload-on-activate signal fires twice.
+      injectRegister: 'manual',
       registerType: 'autoUpdate',
-      // Serve the manifest + dev service worker on `npm run dev` too, so the
-      // Chrome install prompt (Install App chip) appears in development.
-      devOptions: { enabled: true },
+      // DEV ONLY: the dev service worker is intentionally DISABLED here. With
+      // `registerType: 'autoUpdate'`, vite-plugin-pwa's registerSW calls
+      // window.location.reload() inside the SW "activated" handler whenever
+      // `event.isUpdate || event.isExternal` is true — and that path does NOT
+      // consult `onNeedRefresh` (onNeedRefresh is only used in the non-autoUpdate
+      // branch). So the onNeedRefresh callback in main.tsx could not stop it.
+      // During `vite` dev the dev SW keeps re-activating across HMR cycles and
+      // server restarts, which made the POS reload continuously. `devOptions`
+      // only takes effect under the `vite` dev server; `vite build` (production)
+      // is unaffected and still emits the auto-updating service worker so a
+      // deployed kiosk still picks up new versions automatically.
+      devOptions: { enabled: false },
       includeAssets: ['logo.png'],
       manifest: {
         name: 'Spiro POS',

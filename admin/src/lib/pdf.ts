@@ -80,12 +80,15 @@ export class PdfWriter {
     d.setFont('helvetica', 'normal')
     d.setFontSize(9)
     d.setTextColor(100, 116, 139)
+    // Give the subtitle a little extra letter-spacing so the period line reads comfortably across the page.
+    d.setCharSpace(0.4)
     const lines = d.splitTextToSize(subtitle, CONTENT_W * 0.78) as string[]
     let y = MARGIN + 18
     for (const line of lines) {
       d.text(line, PAGE_W / 2, y, { align: 'center' })
       y += lh(9)
     }
+    d.setCharSpace(0)
     this.y = y + 4
     this.rule(0.4, [203, 213, 225])
     this.y += 6
@@ -124,6 +127,12 @@ export class PdfWriter {
     return this
   }
 
+  /** Pure vertical whitespace — breathing room between sections without a rule. */
+  spacer(h = 6): this {
+    this.y += h
+    return this
+  }
+
   /** Table with repeating header across page breaks; rows wrap cell text. */
   sectionTitle(text: string): this {
     const d = this.doc
@@ -140,11 +149,13 @@ export class PdfWriter {
     return this
   }
 
-  /** Key/value lines under a section title (KPI summary block). */
-  keyValues(pairs: { label: string; value: string }[], columns = 2): this {
+  /** Key/value lines under a section title (KPI summary block).
+   *  `rowGap` (mm) adds vertical breathing room between rows; the Executive
+   *  summary passes a larger value so the KPIs read as distinct lines. */
+  keyValues(pairs: { label: string; value: string }[], columns = 2, rowGap = 0): this {
     const d = this.doc
     const colW = CONTENT_W / columns
-    const rowH = lh(10) + 5
+    const rowH = lh(10) + 5 + rowGap
     let row = 0
     let col = 0
     const drawPair = (label: string, value: string, c: number, y: number) => {
@@ -201,6 +212,13 @@ export class PdfWriter {
         const cx = MARGIN + slot * i + slot / 2 + (j - (series.length - 1) / 2) * (barW + 1.5)
         d.setFillColor(...s.color)
         d.rect(cx - barW / 2, base - h, barW, h, 'F')
+        // Value label at the top of each bar (skip when bars are too crowded or the value is zero).
+        if (slot >= 18 && s.val > 0 && h > 0) {
+          d.setFont('helvetica', 'normal')
+          d.setFontSize(6.5)
+          d.setTextColor(...s.color)
+          d.text(fmtCompact(s.val), cx, base - h - 1, { align: 'center' })
+        }
       })
       const lab = opts.labels[i] ?? ''
       if (slot > 16 || i % Math.ceil(n / Math.max(1, Math.floor(CONTENT_W / 16))) === 0) {

@@ -77,7 +77,7 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
     ].join(' · '),
   )
 
-  // ---- KPI summary ----
+    // ---- KPI summary ----
     writer.sectionTitle('Executive summary')
   writer.caption('Key performance indicators for ' + reportPeriodSuffix(period))
   writer.divider()
@@ -87,13 +87,24 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
     { label: 'Transactions', value: String(kpi.sales_count) },
     { label: 'Average transaction', value: ugx(kpi.avg_transaction) },
     { label: 'Discounts given', value: ugx(kpi.discounts) },
+  ], 2, 6)
+  // Breathe between the Executive-summary sections.
+  writer.divider()
+  writer.keyValues([
     { label: 'Bikes sold', value: String(kpi.bikes_sold) },
     { label: 'Parts sold', value: String(kpi.parts_sold) },
+  ], 2, 6)
+  writer.divider()
+  writer.keyValues([
     { label: 'Credit collected (period)', value: ugx(kpi.credit_collected) },
     { label: 'Credit outstanding', value: ugx(kpi.credit_outstanding) },
+  ], 2, 6)
+  writer.divider()
+  writer.keyValues([
     { label: 'Reservations collected', value: ugx(Number(pr.reservations.installments_collected) + Number(pr.reservations.down)) },
     { label: 'Stock value', value: ugx(kpi.stock_value) },
-  ])
+  ], 2, 6)
+  writer.spacer(2)
 
   // ---- Graph: revenue & profit over the period ----
   if (isToday && hourly) {
