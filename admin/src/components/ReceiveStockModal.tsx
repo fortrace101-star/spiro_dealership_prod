@@ -188,6 +188,18 @@ export default function ReceiveStockModal({ list, onClose, onDone }: Props) {
                       </label>
                     )}
                   </div>
+                  <div className="flex items-center justify-between mt-1.5">
+                    <span className="text-[11px] text-slate-500 font-mono">Line total (auto)</span>
+                    <input
+                      className="input w-32 text-xs text-right tabular-nums"
+                      type="text"
+                      readOnly
+                      aria-readonly="true"
+                      tabIndex={-1}
+                      title="Line total (auto) — qty × unit cost. Updates as qty or unit cost change."
+                      value={ugx(Number(l.qty) * (Number(l.unit_cost) || 0))}
+                    />
+                  </div>
                 </div>
               ))}
             </div>

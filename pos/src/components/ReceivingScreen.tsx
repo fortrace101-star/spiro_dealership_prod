@@ -356,6 +356,18 @@ export default function ReceivingScreen({ mode, canReceive, onClose, onDone, sou
                       <input className="input" type="number" min={1} value={l.new_product.selling_price ? String(l.new_product.selling_price) : ''} onChange={(e) => setLines((v) => v.map((x) => x.key === l.key && x.new_product ? { ...x, new_product: { ...x.new_product, selling_price: Number(e.target.value) || 0 } } : x))} />
                     </label>
                   )}
+                  <div className="flex items-center justify-between mt-1.5">
+                    <span className="text-[11px] text-slate-500 font-mono">Line total (auto)</span>
+                    <input
+                      className="input w-32 text-xs text-right tabular-nums"
+                      type="text"
+                      readOnly
+                      aria-readonly="true"
+                      tabIndex={-1}
+                      title="Line total (auto) — qty × unit cost. Updates as qty or unit cost change."
+                      value={ugx(Number(l.qty) * (Number(l.unit_cost) || 0))}
+                    />
+                  </div>
                 </div>
               ))}
             </div>

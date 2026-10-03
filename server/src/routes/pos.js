@@ -56,6 +56,7 @@ router.put('/products/:id', requirePermission(['inventory_adjust', 'product_edit
     );
     await audit({ userId: req.user.id, action: 'update_product', entity: 'product', entityId: rec.id, oldValue: before, newValue: rec });
     emit('product.updated', { id: rec.id, action: 'updated' });
+    setImmediate(() => pushSvc.notifyAdmins(pushSvc.productUpdated(req.user.full_name, rec, 'updated')).catch(() => {}));
     res.json({ product: rec });
   } catch (err) {
     console.error('[pos/products/:id]', err);
@@ -83,6 +84,7 @@ router.post('/inventory/adjust', requirePermission('inventory_adjust'), async (r
   await audit({ userId: req.user.id, action: 'stock_adjustment', entity: 'product', entityId: product_id,
     oldValue: { stock_qty: product.stock_qty }, newValue: { stock_qty: newQty }, meta: { note } });
   emit('stock.changed', { reason: 'adjustment', productId: product_id, stockQty: newQty });
+  setImmediate(() => pushSvc.notifyAdmins(pushSvc.stockAdjusted(req.user.full_name, product, delta, newQty, note, type)).catch(() => {}));
   res.status(201).json({ movement: mv, stock_qty: newQty });
 });
 

@@ -358,4 +358,42 @@ function reorderStatus(list, status) {
   };
 }
 
-module.exports = { notifyAdmins, notifyUser, saleNotification, stockWarning, revenueRecord, restockNotification, creditDecision, creditPayment, ensureConfigured, reservationCreated, releaseRequested, releaseDecision, installmentReceived, installmentSelf, creditFinalized, creditRejectionAck, permissionGranted, reorderStatus };
+/** Admin edited a product's details (SKU / name / price / active / …).
+ *  Tells admins the inventory card changed so pricing & promotions can be re-checked. */
+function productUpdated(actorName, product, action = 'updated') {
+  const name = (product && (product.name || product.sku)) || 'product';
+  const labels = { created: 'created', updated: 'updated', deactivated: 'deactivated', deleted: 'deleted' };
+  const label = labels[action] || action;
+  const icon = action === 'created' ? '📦' : action === 'deleted' ? '🗑️' : '✏️';
+  return {
+    kind: 'product_update',
+    title: `${icon} Product ${label}`,
+    body: `${name}${actorName ? ` by ${actorName}` : ''}`,
+    url: '/admin/inventory',
+    tag: 'product:' + (product && product.id),
+    productId: product && product.id,
+    action,
+  };
+}
+
+/** Stock count corrected/adjusted (damaged, transfer, count-fix, …).
+ *  `product` is the row fetched BEFORE the mutation, so `product.stock_qty` is the old count. */
+function stockAdjusted(actorName, product, delta, newQty, note, type) {
+  const name = (product && (product.name || product.sku)) || 'product';
+  const typeLabel = type && type !== 'adjustment' ? ` (${type})` : '';
+  const sign = delta > 0 ? '+' : '';
+  const notePart = note ? ` — ${note}` : '';
+  return {
+    kind: 'stock_adjustment',
+    title: '📦 Stock adjusted',
+    body: `${name}: ${product && product.stock_qty} → ${newQty} (${sign}${delta})${typeLabel}${notePart}${actorName ? ` by ${actorName}` : ''}`,
+    url: '/admin/inventory',
+    tag: 'stock:' + (product && product.id),
+    productId: product && product.id,
+    delta: Number(delta),
+    newQty: Number(newQty),
+    type,
+  };
+}
+
+module.exports = { notifyAdmins, notifyUser, saleNotification, stockWarning, revenueRecord, restockNotification, creditDecision, creditPayment, ensureConfigured, reservationCreated, releaseRequested, releaseDecision, installmentReceived, installmentSelf, creditFinalized, creditRejectionAck, permissionGranted, reorderStatus, productUpdated, stockAdjusted };

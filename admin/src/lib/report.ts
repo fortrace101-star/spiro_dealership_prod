@@ -70,7 +70,7 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
   const installmentRows = reservationInfo?.payments ?? []
 
   const writer = new PdfWriter(`Spiro Performance Report`)
-  writer.heading(
+    writer.cover(
     [
       `${period.label} · ${from === to ? fmtDate(from) : `${fmtDate(from)} → ${fmtDate(to)}`}`,
       `Generated ${new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`,
@@ -78,7 +78,9 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
   )
 
   // ---- KPI summary ----
-  writer.sectionTitle('Key figures')
+    writer.sectionTitle('Executive summary')
+  writer.caption('Key performance indicators for ' + reportPeriodSuffix(period))
+  writer.divider()
   writer.keyValues([
     { label: 'Revenue', value: ugx(kpi.revenue) },
     { label: 'Gross profit', value: `${ugx(kpi.profit)} (${kpi.revenue ? ((kpi.profit / kpi.revenue) * 100).toFixed(1) : '0.0'}%)` },
@@ -95,7 +97,9 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
 
   // ---- Graph: revenue & profit over the period ----
   if (isToday && hourly) {
-    writer.sectionTitle('Revenue & profit (hourly)')
+      writer.sectionTitle('Revenue & profit (hourly)')
+  writer.caption('Hourly revenue and gross profit for ' + reportPeriodSuffix(period))
+  writer.divider()
     writer.barChart({
       labels: hourly.map((h) => `${String(h.hour).padStart(2, '0')}:00`),
       values: hourly.map((h) => h.revenue),
@@ -104,7 +108,9 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
       height: 56,
     })
   } else if (daily.length > 0) {
-    writer.sectionTitle('Revenue & profit (daily)')
+      writer.sectionTitle('Revenue & profit (daily)')
+  writer.caption('Daily revenue and gross profit for ' + reportPeriodSuffix(period))
+  writer.divider()
     writer.barChart({
       labels: daily.map((d) =>
         new Date(d.day).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
@@ -120,7 +126,9 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
     label: PAYMENT_LABELS[p.payment_method] || p.payment_method,
     value: Number(p.amount),
   }))
-  writer.sectionTitle('Payment mix')
+    writer.sectionTitle('Payment mix')
+  writer.caption('Transactions by payment method for the period')
+  writer.divider()
   if (payRows.length === 0) {
     writer.keyValues([{ label: 'No payments recorded in this period', value: '' }])
   } else {
@@ -138,7 +146,9 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
   }
 
   // ---- Table: top products ----
-  writer.sectionTitle(`Top products · ${period.label}`)
+    writer.sectionTitle(`Top products · ${period.label}`)
+  writer.caption('Best-selling products by revenue for ' + period.label)
+  writer.divider()
   if (top.length === 0) {
     writer.keyValues([{ label: 'No sales in this period', value: '' }])
   } else {
@@ -154,7 +164,9 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
   }
 
   // ---- Table: staff performance ----
-  writer.sectionTitle('Staff performance')
+    writer.sectionTitle('Staff performance')
+  writer.caption('Sales and discounts by team member for the period')
+  writer.divider()
   const activeCashiers = cashiers.filter((c) => c.sales_count > 0)
   if (activeCashiers.length === 0) {
     writer.keyValues([{ label: 'No sales for this period', value: '' }])
@@ -178,7 +190,9 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
   }
 
   // ---- Table: reorder alerts ----
-  writer.sectionTitle('Reorder alerts')
+    writer.sectionTitle('Reorder alerts')
+  writer.caption('Products at or below their reorder level')
+  writer.divider()
   if (low.length === 0) {
     writer.keyValues([{ label: 'All stock levels healthy', value: '' }])
   } else {
@@ -194,7 +208,9 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
   }
 
   // ---- Table: reorder lists prepared in period (incl. cancelled) ----
-  writer.sectionTitle(`Reorder lists prepared · ${period.label}`)
+    writer.sectionTitle(`Reorder lists prepared · ${period.label}`)
+  writer.caption('Reorder lists prepared in the period')
+  writer.divider()
   if (reorderLists.length === 0) {
     writer.keyValues([{ label: 'No reorder lists prepared in this period', value: '' }])
   } else {
@@ -227,7 +243,9 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
   }
 
   // ---- Table: stock received (consignments) in period ----
-  writer.sectionTitle(`Stock received · ${period.label}`)
+    writer.sectionTitle(`Stock received · ${period.label}`)
+  writer.caption('Consignments and stock received in the period')
+  writer.divider()
   if (consignmentRows.length === 0) {
     writer.keyValues([{ label: 'No stock received in this period', value: '' }])
   } else {
@@ -259,7 +277,9 @@ export async function downloadPeriodReport(period: Period): Promise<void> {
   }
 
   // ---- Reservations & installments ----
-  writer.sectionTitle(`Reservations · ${period.label}`)
+    writer.sectionTitle(`Reservations · ${period.label}`)
+  writer.caption('Reservation revenue and installment payments for the period')
+  writer.divider()
   const hasReservations =
     reservationInfo && (reservationInfo.count > 0 || reservationInfo.installments_count > 0)
   if (!hasReservations || !reservationInfo) {

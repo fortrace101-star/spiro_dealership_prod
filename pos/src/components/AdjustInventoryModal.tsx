@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, PRODUCT_CATEGORIES } from '../lib/api'
+import { cn } from '../lib/cn'
 import { db } from '../db/database'
 import type { Product } from '../lib/types'
 
@@ -26,6 +27,8 @@ export default function AdjustInventoryModal({ productId, canEdit, onClose, onDo
   const [qty, setQty] = useState('')
   const [note, setNote] = useState('')
   const [type, setType] = useState<'adjustment' | 'damaged' | 'transfer' | 'return'>('adjustment')
+  // Two tabs within one modal: stock adjustment (live mode) vs. product details.
+  const [tab, setTab] = useState<'adjust' | 'edit'>('adjust')
 
   useEffect(() => {
     db.products.get(productId).then((p) => {
@@ -85,13 +88,37 @@ export default function AdjustInventoryModal({ productId, canEdit, onClose, onDo
     }
   }
 
-  return (
+    return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div className="card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h3 className="font-semibold text-white text-lg mb-4">Adjust: {product.name}</h3>
 
-        {/* ---- Product details (absorbed the retired Edit Products modal) ---- */}
+        {/* Two tabs within one modal: stock adjustment vs. product details. */}
         {canEdit && (
+          <div className="flex gap-1 mb-4 bg-slate-800/40 p-1 rounded-lg">
+            <button
+              type="button"
+              className={cn(
+                'flex-1 text-xs font-semibold py-2 rounded-md transition-colors',
+                tab === 'adjust' ? 'bg-slate-900 text-white' : 'text-slate-400 hover:text-slate-300',
+              )}
+              onClick={() => setTab('adjust')}
+            >
+              Adjust inventory
+            </button>
+            <button
+              type="button"
+              className={cn(
+                'flex-1 text-xs font-semibold py-2 rounded-md transition-colors',
+                tab === 'edit' ? 'bg-slate-900 text-white' : 'text-slate-400 hover:text-slate-300',
+              )}
+              onClick={() => setTab('edit')}
+            >
+              Edit product
+            </button>
+          </div>
+        )}
+        {canEdit && tab === 'edit' && (
           <div className="mb-5">
             <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Product details</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -142,7 +169,8 @@ export default function AdjustInventoryModal({ productId, canEdit, onClose, onDo
                 <label className="text-xs text-slate-400">Active</label>
               </div>
             </div>
-            <div className="flex justify-end mt-3">
+            <div className="flex justify-end gap-2 mt-3">
+              <button className="btn-warn text-xs" onClick={onClose}>Cancel</button>
               <button className="btn-primary text-xs" disabled={saving} onClick={() => void saveDetails()}>
                 {saving ? 'Saving…' : 'Save details'}
               </button>
@@ -150,7 +178,7 @@ export default function AdjustInventoryModal({ productId, canEdit, onClose, onDo
           </div>
         )}
         {/* ---- Stock adjustment ---- */}
-        <div className={canEdit ? 'border-t border-slate-800 pt-4' : ''}>
+        <div hidden={tab !== 'adjust'} className={canEdit ? 'border-t border-slate-800 pt-4' : ''}>
           <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Stock adjustment</div>
           <div className="space-y-3">
             <div>
@@ -184,7 +212,8 @@ export default function AdjustInventoryModal({ productId, canEdit, onClose, onDo
               <p className="text-xs text-red-400">Resulting stock would be negative ({newQty})</p>
             )}
           </div>
-          <div className="flex justify-end mt-3">
+            <div className="flex justify-end gap-2 mt-3">
+              <button className="btn-warn text-xs" onClick={onClose}>Cancel</button>
             <button
               className="btn-primary text-xs"
               disabled={saving || !isValid}
@@ -196,11 +225,6 @@ export default function AdjustInventoryModal({ productId, canEdit, onClose, onDo
         </div>
 
         {error && <p className="text-xs text-red-400 mt-3">{error}</p>}
-
-        {/* Orange Cancel — aborting a live stock mode, not a passive dismiss. */}
-        <div className="flex justify-end mt-4">
-          <button className="btn-warn text-xs" onClick={onClose}>Cancel</button>
-        </div>
       </div>
     </div>
   )

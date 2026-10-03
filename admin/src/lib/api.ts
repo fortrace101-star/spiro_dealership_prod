@@ -289,7 +289,14 @@ export const api = {
   // (stock guards + idempotency stay identical to the operator's Finalize).
   approveFinalizeCredit: (saleId: string) =>
     request<{ ok: boolean; approved: boolean; duplicate: boolean }>(`/api/admin/credit-sales/${saleId}/approve-finalize`, { method: 'POST', body: JSON.stringify({}) }),
-  audit: () => request<{ entries: AuditEntry[] }>('/api/admin/audit'),
+    audit: (params: { action?: string; user?: string; from?: string; to?: string } = {}) => {
+    const sp = new URLSearchParams({ limit: '300' })
+    if (params.action) sp.set('action', params.action)
+    if (params.user) sp.set('user', params.user)
+    if (params.from) sp.set('from', params.from)
+    if (params.to) sp.set('to', params.to)
+    return request<{ entries: AuditEntry[] }>(`/api/admin/audit?${sp.toString()}`)
+  },
 
   // service jobs / workshop dispatch
   jobs: () => request<{ jobs: ServiceJobCard[] }>('/api/admin/jobs'),

@@ -40,7 +40,15 @@ button:focus {
   }
   .input {
     @apply bg-[#0c1210] border border-slate-700/80 rounded-lg px-3 py-2 text-sm text-slate-200
-      placeholder:text-slate-600 outline-none focus:border-brand-500/70 w-full;
+            placeholder:text-slate-600 outline-none focus:border-brand-500/70 w-full;
+  }
+  /* Locked / derived money fields — visibly not typeable. Only <input>/<textarea>
+     carry [readonly]; <select> has no readonly attribute (disabled-only) and is
+     unaffected, and ordinary editable inputs never match. Declared after .input
+     with equal specificity, so this styling wins. Covers: the POS receiving
+     delivery reference and reservation total price. */
+  .input:where([readonly]) {
+    @apply cursor-not-allowed text-slate-300;
   }
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition

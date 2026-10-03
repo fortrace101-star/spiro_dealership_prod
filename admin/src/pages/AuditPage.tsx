@@ -28,22 +28,89 @@ function prettyValue(v: unknown): string {
 }
 
 export default function AuditPage() {
-  const [entries, setEntries] = useState<AuditEntry[] | null>(null)
+    const [entries, setEntries] = useState<AuditEntry[] | null>(null)
+  const [filters, setFilters] = useState({ action: '', user: '', from: '', to: '' })
   // Row detail drawer: on phones the Entity + Changes columns are hidden, so
   // tapping a row is how a cashier/admin reads the full entry (matches Customers).
   const [detail, setDetail] = useState<AuditEntry | null>(null)
 
-  useEffect(() => {
+    useEffect(() => {
+    const params: { action?: string; user?: string; from?: string; to?: string } = {}
+    if (filters.action) params.action = filters.action
+    if (filters.user) params.user = filters.user
+    if (filters.from) params.from = filters.from
+    if (filters.to) params.to = filters.to
     api
-      .audit()
+      .audit(params)
       .then((r) => setEntries(r.entries))
       .catch(() => setEntries([]))
-  }, [])
+  }, [filters.action, filters.user, filters.from, filters.to])
 
   return (
     <div>
       <PageHeader title="Audit Trail" subtitle="User + date + time + old value + new value for every critical action" />
 
+      {/* Audit filters — date range, event-type dropdown, actor. The server
+          applies the same filters on its side, so scoping is authoritative and
+          paging/categorising never holds rows the API can't return. */}
+      <div className="card p-3 sm:p-4 mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-slate-500">From</label>
+          <input type="date" className="input mt-1 w-full" value={filters.from} onChange={(e) => setFilters({ ...filters, from: e.target.value })} />
+        </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-slate-500">To</label>
+          <input type="date" className="input mt-1 w-full" value={filters.to} onChange={(e) => setFilters({ ...filters, to: e.target.value })} />
+        </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-slate-500">Event type</label>
+          <select className="input mt-1 w-full" value={filters.action} onChange={(e) => setFilters({ ...filters, action: e.target.value })}>
+            <option value="">All events</option>
+            <optgroup label="Inventory">
+              <option value="stock_adjustment">Stock adjustment</option>
+              <option value="update_product">Product edited</option>
+              <option value="create_product">Product created</option>
+              <option value="delete_product">Product deleted</option>
+            </optgroup>
+            <optgroup label="Sales">
+              <option value="sale">Sale</option>
+              <option value="payment">Payment</option>
+            </optgroup>
+            <optgroup label="Finance">
+              <option value="installment_received">Installment received</option>
+              <option value="credit_approval">Credit approval</option>
+              <option value="credit_decision">Credit decision</option>
+            </optgroup>
+            <optgroup label="Reservations">
+              <option value="reservation_release_requested">Release requested</option>
+            </optgroup>
+            <optgroup label="Customers">
+              <option value="create_customer">Customer created</option>
+              <option value="update_customer">Customer updated</option>
+            </optgroup>
+            <optgroup label="Team">
+              <option value="approval_approved">Approval approved</option>
+              <option value="approval_rejected">Approval rejected</option>
+              <option value="register">Register / login</option>
+              <option value="login">Login</option>
+              <option value="logout">Logout</option>
+            </optgroup>
+            <optgroup label="Purchasing">
+              <option value="reorder_list">Reorder list</option>
+              <option value="restock">Restock</option>
+            </optgroup>
+          </select>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-slate-500">Actor</label>
+          <input type="text" className="input mt-1 w-full" placeholder="name or user id" value={filters.user} onChange={(e) => setFilters({ ...filters, user: e.target.value })} />
+        </div>
+      </div>
+      {Object.values(filters).some(Boolean) && (
+        <div className="mb-3">
+          <button type="button" className="btn-ghost btn-sm" onClick={() => setFilters({ action: '', user: '', from: '', to: '' })}>Clear filters</button>
+        </div>
+      )}
       <div className="card overflow-hidden">
         {entries === null ? (
           <Spinner />

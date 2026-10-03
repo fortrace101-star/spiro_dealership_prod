@@ -178,6 +178,7 @@ router.put('/products/:id', requireRole('manager'), requirePermission(['inventor
   );
   await audit({ userId: req.user.id, action: 'update_product', entity: 'product', entityId: rec.id, oldValue: before, newValue: rec });
   emit('product.updated', { id: rec.id, action: 'updated' });
+  setImmediate(() => pushSvc.notifyAdmins(pushSvc.productUpdated(req.user.full_name, rec, 'updated')).catch(() => {}));
   res.json({ product: rec });
 });
 
@@ -718,6 +719,7 @@ router.post('/inventory/adjust', requireRole('manager'), requirePermission(['inv
   await audit({ userId: req.user.id, action: 'stock_adjustment', entity: 'product', entityId: product_id,
     oldValue: { stock_qty: product.stock_qty }, newValue: { stock_qty: newQty }, meta: { note } });
   emit('stock.changed', { reason: 'adjustment', productId: product_id, stockQty: newQty });
+  setImmediate(() => pushSvc.notifyAdmins(pushSvc.stockAdjusted(req.user.full_name, product, delta, newQty, note, type)).catch(() => {}));
   res.status(201).json({ movement: mv, stock_qty: newQty });
 });
 
@@ -923,11 +925,29 @@ router.post('/dev/wipe', requireRole(), async (req, res) => {
 
 // ---------- Audit log (admin) ----------
 router.get('/audit', requireRole(), async (req, res) => {
-  const { limit = 300 } = req.query;
+  const { limit = 300, action, user: actor, from, to } = req.query;
+  // Server-side filtering to back the Audit page's filter controls. Parameterized
+  // so actor/action/date values can never reach the SQL template as literals.
+  const wheres = [];
+  const args = [];
+  if (action) { args.push(String(action)); wheres.push(`a.action = $${args.length}`) }
+  if (actor) {
+    const like = `%${String(actor).replace(/%/g, '\\%')}%`;
+    args.push(like);
+    // actor is free text ("name or user id"): match by display name, and also
+    // cast user_id to text so a UUID fragment matches (user_id is a uuid FK,
+    // so a literal uuid comparison would otherwise 500 on non-uuid input).
+    wheres.push(`(a.user_id::text ILIKE $${args.length} OR u.full_name ILIKE $${args.length} ESCAPE '\\')`);
+  }
+  if (from) { args.push(String(from)); wheres.push(`a.created_at >= $${args.length}::timestamptz`) }
+  if (to) { args.push(String(to)); wheres.push(`a.created_at <= $${args.length}::timestamptz`) }
+  const where = wheres.length ? `WHERE ${wheres.join(' AND ')}` : '';
   const entries = await many(
     `SELECT a.*, u.full_name AS user_name, u.role AS user_role
        FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
-      ORDER BY a.created_at DESC LIMIT ${Number(limit) || 300}`
+     ${where}
+    ORDER BY a.created_at DESC LIMIT $${args.length + 1}`,
+    [...args, Number(limit) || 300]
   );
   res.json({ entries });
 });

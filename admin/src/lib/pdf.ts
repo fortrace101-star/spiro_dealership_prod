@@ -64,6 +64,63 @@ export class PdfWriter {
     this.y += 4
     this.rule(0.4, [203, 213, 225])
     this.y += 6
+        return this
+  }
+
+    /** Headed-paper title block drawn at the top of page 1. Unlike a full-bleed
+   *  `cover()`, the report body starts on this same page — the title and meta
+   *  sit in the top margin above the first section instead of consuming a whole
+   *  page, so nothing gets hidden behind a cover. */
+  header(subtitle: string): this {
+    const d = this.doc
+    d.setFont('helvetica', 'bold')
+    d.setFontSize(22)
+    d.setTextColor(15, 23, 42)
+    d.text(this.title, PAGE_W / 2, MARGIN + 10, { align: 'center' })
+    d.setFont('helvetica', 'normal')
+    d.setFontSize(9)
+    d.setTextColor(100, 116, 139)
+    const lines = d.splitTextToSize(subtitle, CONTENT_W * 0.78) as string[]
+    let y = MARGIN + 18
+    for (const line of lines) {
+      d.text(line, PAGE_W / 2, y, { align: 'center' })
+      y += lh(9)
+    }
+    this.y = y + 4
+    this.rule(0.4, [203, 213, 225])
+    this.y += 6
+    return this
+  }
+
+  /** Caption line rendered just above the element it describes (tables/charts).
+   *  Italic, muted, wraps across the full content width. */
+  caption(text: string): this {
+    const d = this.doc
+    if (this.y > BOTTOM) {
+      d.addPage()
+      this.y = MARGIN
+    }
+    d.setFont('helvetica', 'italic')
+    d.setFontSize(8.5)
+    d.setTextColor(100, 116, 139)
+    const lines = d.splitTextToSize(text, CONTENT_W) as string[]
+    for (const line of lines) {
+      if (this.y > BOTTOM) {
+        d.addPage()
+        this.y = MARGIN
+      }
+      d.text(line, MARGIN, this.y)
+      this.y += lh(8.5)
+    }
+    this.y += 3
+    return this
+  }
+
+  /** Thin section-divider rule across the content area. */
+  divider(width = 0.4, color: [number, number, number] = [226, 232, 240]): this {
+    this.y += 2
+    this.rule(width, color)
+    this.y += 4
     return this
   }
 

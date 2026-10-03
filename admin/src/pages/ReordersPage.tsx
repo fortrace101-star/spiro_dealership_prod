@@ -935,12 +935,13 @@ function ReorderEditModal({ record, onClose, onSaved }: { record: PurchasingReco
                 {/* Line total — read-only: qty × unit cost, recomputed on every
                     keystroke in either field (the server derives the same value
                     from the two fields on save, so it is never submitted). */}
-                <input
+                  <input
                   className="input w-28 px-2 text-xs text-right tabular-nums"
                   type="text"
                   readOnly
+                  aria-readonly="true"
                   tabIndex={-1}
-                  title="Line total (auto) — qty × unit cost"
+                  title="Line total (auto) — qty × unit cost. Read-only: updates in place as qty or unit cost change."
                   value={ugx(lineTotal(l))}
                 />
                 <button
