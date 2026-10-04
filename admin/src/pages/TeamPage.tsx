@@ -349,15 +349,17 @@ export default function TeamPage() {
             the select, growing to fill the row on sm+ (matching Overview, no 260px
             cap), with the default inline (non-overlay) Custom panel dropping below
             and pushing the staff table downward. */}
-        <div className="flex flex-wrap gap-3 mb-4">
-          <div className="flex-1 min-w-[150px]">
-            <Field label="Pick period">
-              <PeriodPicker
-                period={period}
-                onChange={setPeriod}
-                variant="select"
-              />
-            </Field>
+        <div className="card p-4 mb-4">
+          <div className="flex flex-wrap gap-3">
+            <div className="flex-1 min-w-[150px]">
+              <Field label="Pick period">
+                <PeriodPicker
+                  period={period}
+                  onChange={setPeriod}
+                  variant="select"
+                />
+              </Field>
+            </div>
           </div>
         </div>
         {cashiers === null ? (

@@ -62,9 +62,9 @@ export default function SalesPage() {
     <div>
       <PageHeader title="Sales" subtitle="Every transaction across the dealership" />
 
-      <div className="card p-4 mb-4 space-y-3">
+        <div className="card p-4 mb-4">
         {/* Row 1: period + payment filters side by side, compact text, titled */}
-        <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap gap-3">
           <div className="flex-1 min-w-[150px]">
             <Field label="Pick period">
               <PeriodPicker period={period} onChange={setPeriod} variant="select" />
