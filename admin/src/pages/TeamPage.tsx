@@ -345,11 +345,12 @@ export default function TeamPage() {
         <div className="mb-4">
           <h3 className="font-semibold text-white">Staff performance</h3>
         </div>
-        {/* Period filter — same layout as the Sales page: a labeled Field around
-            the select, capped at 260px on sm+, with the default inline (non-overlay)
-            Custom panel dropping below and pushing the staff table downward. */}
-        <div className="w-full mb-4">
-          <div className="w-full sm:max-w-[260px]">
+        {/* Period filter — same layout as Overview/Sales: a labeled Field around
+            the select, growing to fill the row on sm+ (matching Overview, no 260px
+            cap), with the default inline (non-overlay) Custom panel dropping below
+            and pushing the staff table downward. */}
+        <div className="flex flex-wrap gap-3 mb-4">
+          <div className="flex-1 min-w-[150px]">
             <Field label="Pick period">
               <PeriodPicker
                 period={period}
