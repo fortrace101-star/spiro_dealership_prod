@@ -75,7 +75,7 @@ export function PeriodPicker({
             {/* Width is set on the wrapper: the Field label is content-sized,
                 so the input's percentage must resolve against a definite
                 wrapper (half the panel = the picker column above). */}
-            <div className="w-[calc(50%_-_6px)]">
+            <div className="w-full sm:w-[calc(50%_-_6px)] order-3 sm:order-1">
               <Field label={`Last N days${phone ? '' : ' (max 730)'}`}>
                 <input
                   className="input w-full text-[13px]"
@@ -93,35 +93,32 @@ export function PeriodPicker({
                 on PC it collapses to the plain word "or" inline between the
                 Last N Days and From/To sections, with auto margins so it sits
                 exactly midway between them (equal space both sides). */}
-            <div className="w-full sm:w-auto sm:mx-auto flex items-center gap-3 sm:gap-2" aria-hidden="true">
-              <hr className="flex-1 border-0 border-t border-slate-700/70 sm:hidden" />
-              <span className="shrink-0 w-8 h-8 rounded-full bg-[#12161d] border border-slate-700/80 flex items-center justify-center text-[11px] text-slate-400 sm:w-auto sm:h-auto sm:bg-transparent sm:border-0 sm:rounded-none sm:text-xs sm:pb-2.5">
-                or
-              </span>
-              <hr className="flex-1 border-0 border-t border-slate-700/70 sm:hidden" />
+            <div className="w-full flex items-center justify-center order-2 sm:w-auto sm:mx-auto sm:justify-normal" aria-hidden="true">
+              <hr className="w-full border-0 border-t border-slate-700/70 sm:hidden" />
+              <span className="hidden sm:inline-block sm:mx-2 text-xs text-slate-400">or</span>
             </div>
 
-            {/* From, To and Apply grouped so they always share one line;
-                mx-auto centers the group in the leftover space so its side
-                paddings stay balanced within the card. The PC-only translate
-                nudges the group slightly left of the exact midpoint. */}
-            <div className="flex items-end gap-2 mx-auto sm:-translate-x-6">
+            {/* From and To share one row; Apply is pulled below "Last N days"
+                on mobile (order-4) and sits at the end of the row on PC
+                (sm:order-3). mx-auto centers the From/To group in the leftover
+                space; the PC-only -translate-x-6 nudges it slightly left. */}
+            <div className="flex flex-col gap-2 w-full sm:flex-row sm:items-end sm:gap-2 sm:mx-auto sm:w-auto sm:-translate-x-6 order-1 sm:order-3">
               <Field label="From">
-                <input className="input w-[115px] sm:w-[135px] text-[13px]" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
+                <input className="input w-full sm:w-[115px] md:w-[135px] text-[13px]" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
               </Field>
               <Field label="To">
-                <input className="input w-[115px] sm:w-[135px] text-[13px]" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
+                <input className="input w-full sm:w-[115px] md:w-[135px] text-[13px]" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
               </Field>
-              <button
-                type="button"
-                className="btn-primary text-xs px-5"
-                onClick={() => onChange(customPeriod(customDays ? Number(customDays) : undefined, customFrom || undefined, customTo || undefined))}
+            </div>
+            <button
+              type="button"
+              className="btn-primary text-xs px-5 w-full sm:w-auto mt-2 sm:mt-0 order-4 sm:order-3"
+              onClick={() => onChange(customPeriod(customDays ? Number(customDays) : undefined, customFrom || undefined, customTo || undefined))}
               >
                 Apply
-              </button>
-            </div>
-            {isCustom && <span className="hidden sm:inline text-xs text-brand-300 pb-2.5">Active: {period.label}</span>}
-            {isCustom && <div className="sm:hidden mt-2 text-xs text-brand-300 text-center">Active: {period.label}</div>}
+            </button>
+            {isCustom && <span className="hidden sm:inline text-xs text-brand-300 pb-2.5 order-5">Active: {period.label}</span>}
+            {isCustom && <div className="sm:hidden mt-2 text-xs text-brand-300 text-center order-5">Active: {period.label}</div>}
           </div>
         )}
       </div>
