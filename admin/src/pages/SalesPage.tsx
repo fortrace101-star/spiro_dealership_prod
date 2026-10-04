@@ -90,7 +90,7 @@ export default function SalesPage() {
         {/* Row 2: search fills the remaining space, button pinned right-most;
             the transactions count sits directly below the search field */}
         <form
-          className="flex flex-wrap gap-3 items-start"
+          className="flex flex-wrap gap-3 items-start sm:mt-3"
           onSubmit={(e) => {
             e.preventDefault()
             load().catch(() => setSales([]))
