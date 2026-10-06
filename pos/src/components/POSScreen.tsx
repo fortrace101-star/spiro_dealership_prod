@@ -83,7 +83,12 @@ export default function POSScreen() {
   const canReorder = hasAnyPerm(REORDER_PERMS)
   const canCreditDesk = hasAnyPerm(CREDIT_DESK_PERMS)
   const [reorderCount, setReorderCount] = useState(0)
-  const [flash, setFlash] = useState<string | null>(null)
+  const [flash, setFlash] = useState<{ message: string; subtitle?: string } | null>(null)
+  /** Single-line or two-line in-app toast. Pass `subtitle` for the stacked
+   *  second line (e.g. POS sale total + Today's revenue). */
+  const showFlash = useCallback((message: string, subtitle?: string) => {
+    setFlash({ message, subtitle })
+  }, [])
   const [showCredit, setShowCredit] = useState(false)
   const [creditBadge, setCreditBadge] = useState({ awaiting: 0, approved: 0, rejected: 0 })
   const [creditNote, setCreditNote] = useState<string | null>(null)
@@ -247,7 +252,7 @@ export default function POSScreen() {
   const addProduct = useCallback(
     (p: Product, qty = 1) => {
       cart.addItem({ kind: 'part', id: p.id, name: p.name, sku: p.sku, unit_price: Number(p.selling_price), unit_cost: Number(p.cost_price), stock_qty: p.stock_qty, priceOverride: null }, qty)
-      setFlash(`${p.name} added`)
+      showFlash(`${p.name} added`)
     },
     [cart],
   )
@@ -255,7 +260,7 @@ export default function POSScreen() {
   const addBike = useCallback(
     (b: Bike) => {
       cart.addItem({ kind: 'bike', id: b.id, name: `${b.model}${b.color ? ` · ${b.color}` : ''}`, sku: b.vin, unit_price: Number(b.selling_price), unit_cost: Number(b.cost_price), stock_qty: 1, priceOverride: null })
-      setFlash(`${b.model} added`)
+      showFlash(`${b.model} added`)
     },
     [cart],
   )
@@ -275,7 +280,7 @@ export default function POSScreen() {
         return
       }
       setSearch(code) // fall back to manual search
-      setFlash(`No product with barcode ${code}`)
+      showFlash(`No product with barcode ${code}`)
     },
     [addProduct, addBike],
   )
@@ -283,7 +288,7 @@ export default function POSScreen() {
 
   useEffect(() => {
     if (!flash) return
-    const t = setTimeout(() => setFlash(null), 1800)
+    const t = setTimeout(() => setFlash(null), flash.subtitle ? 5000 : 1800)
     return () => clearTimeout(t)
   }, [flash])
 
@@ -296,13 +301,13 @@ export default function POSScreen() {
   // Surface push-subscription failures as a toast (the account popup shows
   // the same message persistently) — enabling alerts must never fail silently.
   useEffect(() => {
-    if (push.error) setFlash(push.error)
+    if (push.error) showFlash(push.error)
   }, [push.error])
 
   // One-time auto-subscribe hint (iOS install / blocked alerts) from the hook.
   useEffect(() => {
     if (!push.notice) return
-    setFlash(push.notice)
+    showFlash(push.notice)
     push.dismissNotice()
   }, [push.notice, push.dismissNotice])
 
@@ -313,7 +318,7 @@ export default function POSScreen() {
   useEffect(() => {
     function onMessage(e: MessageEvent) {
       const payload = e.data?.type === 'PUSH'
-        ? (e.data.payload as { creditEvent?: boolean; title?: string; body?: string } | undefined)
+        ? (e.data.payload as { creditEvent?: boolean; title?: string; body?: string; message?: string; message2?: string } | undefined)
         : null
       if (!payload) return
       if (payload.creditEvent) {
@@ -326,8 +331,10 @@ export default function POSScreen() {
           .creditSales()
           .then((r) => setCreditBadge(creditBadgeCounts(r.pending)))
           .catch(() => {})
+      } else if (payload.message) {
+        showFlash(payload.message, payload.message2)
       } else if (payload.title) {
-        setFlash(payload.title)
+        showFlash(payload.title)
       }
       // Every push lands an inbox row — recount the bell immediately.
       void api.unreadCount().then((r) => setNotifUnread(r.unread_count)).catch(() => {})
@@ -337,20 +344,44 @@ export default function POSScreen() {
   }, [])
 
   // Inbox badge: poll (30s, mirrors the credit poll — kiosk-safe, no dialogs)
-  // plus the instant refetch on every incoming push above.
+  // plus the instant refetch on every incoming push above. The same pass
+  // surfaces the POS sale toast (receipt total + day revenue) when the SSE
+  // stream was down: any pos_sale row newer than `spiro_sale_seen` toasts
+  // once. First run adopts the newest row as the baseline without toasting —
+  // exactly like the credit poll's spiro_credit_seen.
   useEffect(() => {
-    const poll = () => void api.unreadCount().then((r) => setNotifUnread(r.unread_count)).catch(() => {})
+    const poll = () =>
+      void api
+        .notifications()
+        .then((r) => {
+          setNotifUnread(r.unread_count)
+          const rows = r.notifications.filter((n) => n.kind === 'pos_sale')
+          const since = localStorage.getItem('spiro_sale_seen')
+          if (!since) {
+            const first = rows[0]
+            localStorage.setItem('spiro_sale_seen', first ? first.created_at : new Date().toISOString())
+            return
+          }
+          const fresh = rows.find((n) => n.created_at > since)
+          if (!fresh) return
+          const p = (fresh.payload || {}) as { message?: string; message2?: string }
+          if (typeof p.message === 'string' && p.message) {
+            showFlash(p.message, typeof p.message2 === 'string' ? p.message2 : undefined)
+          }
+          localStorage.setItem('spiro_sale_seen', fresh.created_at)
+        })
+        .catch(() => {})
     poll()
     const id = setInterval(poll, 30_000)
     return () => clearInterval(id)
-  }, [])
+  }, [showFlash])
 
   // Live updates (Workstream D): the server pushes the moment a sale, stock
   // change, reorder or credit decision lands. Targeted refetch per event keeps
   // the badge immediate; the 30s polls above stay as the offline fallback.
   const showNotifsRef = useRef(false)
   useEffect(() => { showNotifsRef.current = showNotifs }, [showNotifs])
-  useEvents((type) => {
+  useEvents((type, payload) => {
     if (type === 'ready') return
     if (type === 'sale.created' || type === 'stock.changed' || type === 'product.updated' || type === 'reorder.status') {
       void runSyncCycle('sse')
@@ -366,6 +397,13 @@ export default function POSScreen() {
           .notifications()
           .then((r) => { setNotifs(r.notifications); setNotifUnread(r.unread_count) })
           .catch(() => {})
+      }
+      // POS sale toast — stack the receipt total + Today's revenue subtitle.
+      // `at` (server clock) advances the poll baseline so the 30s fallback
+      // never toasts the same sale twice.
+      if (typeof payload?.message === 'string' && payload.message) {
+        localStorage.setItem('spiro_sale_seen', typeof payload.at === 'string' ? payload.at : new Date().toISOString())
+        showFlash(payload.message, payload.message2 as string | undefined)
       }
     }
     if (type === 'approval.decided') {
@@ -415,7 +453,7 @@ export default function POSScreen() {
     setNotifUnread((c) => Math.max(0, c - 1))
     setShowNotifs(false)
     // Single-screen app: no deep-linking — just acknowledge the headline.
-    setFlash(n.title)
+    showFlash(n.title)
     try { await api.deleteNotification(n.id) } catch { /* next poll reconciles */ }
   }
 
@@ -424,7 +462,7 @@ export default function POSScreen() {
     setNotifs([])
     setNotifUnread(0)
     try { await api.clearNotifications() } catch { /* non-fatal */ }
-    setFlash('Notifications cleared')
+    showFlash('Notifications cleared')
   }
 
   const totals = cartTotals(cart.items)
@@ -838,7 +876,7 @@ export default function POSScreen() {
                               cart.setPriceOverride(i.key, val >= i.unit_price ? val : null)
                               setEditingPriceKey(null)
                               setDraftPrice('')
-                              setFlash(val >= i.unit_price ? `Price updated to ${ugx(val * i.qty)}` : 'Price reset to list')
+                              showFlash(val >= i.unit_price ? `Price updated to ${ugx(val * i.qty)}` : 'Price reset to list')
                             }}
                           >✓</button>
                           <button
@@ -884,8 +922,9 @@ export default function POSScreen() {
 
       {/* Toast */}
       {flash && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#111814] border border-brand-500/40 text-brand-200 text-sm px-4 py-2.5 rounded-xl shadow-lg z-50">
-          {flash}
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#111814] border border-brand-500/40 text-brand-200 text-sm px-4 py-2.5 rounded-xl shadow-lg z-[70] text-center">
+          <div>{flash.message}</div>
+          {flash.subtitle && <div className="text-brand-300 text-xs mt-0.5">{flash.subtitle}</div>}
         </div>
       )}
 
@@ -949,7 +988,7 @@ export default function POSScreen() {
           online={sync.online}
           onClose={() => setShowCredit(false)}
           onBadge={refreshBadge}
-          onFlash={(msg) => setFlash(msg)}
+          onFlash={(msg) => showFlash(msg)}
         />
       )}
 
@@ -958,7 +997,7 @@ export default function POSScreen() {
           prefillBike={reserveBike}
           onClose={() => { setShowReservations(false); setReserveBike(null) }}
           onFlash={(msg) => {
-            setFlash(msg)
+            showFlash(msg)
             void runSyncCycle('after-reservation')
           }}
         />
@@ -980,7 +1019,7 @@ export default function POSScreen() {
           sourceList={sourceList || undefined}
           onClose={() => { setStockMode(null); setSourceList(null) }}
           onDone={(message) => {
-            setStockMode(null); setSourceList(null); setFlash(message)
+            setStockMode(null); setSourceList(null); showFlash(message)
             void runSyncCycle('after-receive')
             // Refresh the reorder-list badge count — only pending + processed count.
             // Skipped when the user cannot open reorder lists (no permission → 403).
@@ -1002,7 +1041,7 @@ export default function POSScreen() {
           mode="reorder"
           canReceive={canReceive}
           onClose={() => setStockMode(null)}
-          onDone={(message) => { setStockMode(null); setFlash(message); void runSyncCycle('after-receive') }}
+          onDone={(message) => { setStockMode(null); showFlash(message); void runSyncCycle('after-receive') }}
         />
       )}
 
@@ -1011,7 +1050,7 @@ export default function POSScreen() {
           productId={adjustProductId}
           canEdit={canEditProducts || canAdjustInventory}
           onClose={() => { setAdjustProductId(null); setStockMode(null) }}
-          onDone={(message) => { setStockMode(null); setAdjustProductId(null); setFlash(message); void runSyncCycle('after-adjust') }}
+          onDone={(message) => { setStockMode(null); setAdjustProductId(null); showFlash(message); void runSyncCycle('after-adjust') }}
         />
       )}
     </div>

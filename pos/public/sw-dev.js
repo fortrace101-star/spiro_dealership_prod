@@ -3,6 +3,10 @@
  * the registration is keyed by scope, so dev → prod swaps the script cleanly. */
 importScripts('/push-handler.js')
 
+// Fetch handler: browsers require one for the installability criteria
+// (PWA download / Add to Home Screen). Dev always goes to the network.
+self.addEventListener('fetch', () => {})
+
 self.addEventListener('install', () => {
   self.skipWaiting();
 });

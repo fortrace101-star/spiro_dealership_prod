@@ -11,18 +11,17 @@ export default defineConfig({
       // service worker is registered twice and the reload-on-activate signal fires twice.
       injectRegister: 'manual',
       registerType: 'autoUpdate',
-      // DEV ONLY: the dev service worker is intentionally DISABLED here. With
-      // `registerType: 'autoUpdate'`, vite-plugin-pwa's registerSW calls
+      // DEV: the manifest + a dev service worker are served so the app is
+      // installable (PWA download / Add to Home Screen) from the dev server.
+      // The reload loop from earlier stays fixed — main.tsx registers the
+      // hand-written /sw-dev.js in dev (plain register, no update listeners).
+      // With `registerType: 'autoUpdate'`, registerSW calls
       // window.location.reload() inside the SW "activated" handler whenever
-      // `event.isUpdate || event.isExternal` is true — and that path does NOT
-      // consult `onNeedRefresh` (onNeedRefresh is only used in the non-autoUpdate
-      // branch). So the onNeedRefresh callback in main.tsx could not stop it.
-      // During `vite` dev the dev SW keeps re-activating across HMR cycles and
-      // server restarts, which made the POS reload continuously. `devOptions`
-      // only takes effect under the `vite` dev server; `vite build` (production)
-      // is unaffected and still emits the auto-updating service worker so a
-      // deployed kiosk still picks up new versions automatically.
-      devOptions: { enabled: false },
+      // `event.isUpdate || event.isExternal` is true, and the dev worker
+      // re-activates across HMR cycles → continuous reloads. `devOptions`
+      // only applies to `vite` dev; `vite build` still emits the
+      // auto-updating worker so deployed kiosks self-update.
+      devOptions: { enabled: true },
       includeAssets: ['logo.png'],
       manifest: {
         name: 'Spiro POS',

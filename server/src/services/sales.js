@@ -214,6 +214,15 @@ async function recordSale(input, actor) {
       // it has no stock, no revenue and no liability until finalized.
       if (sale.status !== 'pending_credit') {
         pushSvc.notifyAdmins(pushSvc.saleNotification({ ...sale, cashier_name: cashierName })).catch(() => {})
+        // POS terminals: two-line toast (sale total + running day revenue).
+        // Mirrors the /today report window (completed, non-credit, server-day)
+        // and includes this sale — it is already COMMITTED above. Non-blocking:
+        // a notification failure never affects the sale.
+        one(`SELECT COALESCE(sum(total),0) AS r FROM sales
+             WHERE status = 'completed' AND payment_method <> 'credit'
+               AND created_at >= date_trunc('day', now())`)
+          .then((row) => pushSvc.posSale(sale, Number(row && row.r) || 0))
+          .catch(() => {})
       }
       // Pending approval requests created by this sale (credit / big discount)
       for (const p of approvalPushes) pushSvc.notifyAdmins(p).catch(() => {})
@@ -236,8 +245,9 @@ async function recordSale(input, actor) {
           }
         } catch {}
       }
-      // All-time-high records: product revenue + credit settlements (see helper).
-      checkRevenueRecords(pushSvc).catch(() => {})
+      // Daily revenue line for the admin inbox (see helper). Pending-credit
+      // requests move no money, so they must not publish an unchanged figure.
+      if (sale.status !== 'pending_credit') checkRevenueRecords(pushSvc).catch(() => {})
     });
 
     return { sale, items, duplicate: false };
@@ -250,10 +260,10 @@ async function recordSale(input, actor) {
 }
 
 /**
- * Recompute the all-time-high week/month revenue and push a record
- * notification when beaten. Revenue = product sales (completed, non-credit)
- * + credit settlements received — a credit sale never counts here, not even
- * after approval; only the payments that dissolve its debt do.
+ * Publish today's cumulative revenue to the admin inbox on EVERY transaction
+ * (completed, non-credit sales — the same window as /reports/today revenue
+ * and the POS toast message2), and silently refresh the week/month
+ * all-time-high rows in revenue_records.
  * Uses fresh pool queries, so it is safe to call from setImmediate after COMMIT.
  */
 async function checkRevenueRecords(pushSvc) {
@@ -266,23 +276,35 @@ async function checkRevenueRecords(pushSvc) {
           WHERE date_trunc('${trunc}', created_at) = date_trunc('${trunc}', CURRENT_DATE)), 0) AS t`
   );
 
-  const bump = async (period, total, label) => {
+  // Silent bookkeeping: keep the week/month all-time-high rows fresh. The
+  // admin-facing notification is the per-transaction daily figure below.
+  const bump = async (period, total) => {
     const cur = Number(total || 0)
     const prev = await one(`SELECT COALESCE(max(revenue),0) AS r FROM revenue_records WHERE period = $1`, [period])
     if (cur > Number(prev?.r || 0)) {
-      const rec = await one(
+      await one(
         `INSERT INTO revenue_records (period, revenue, date) VALUES ($1, $2, CURRENT_DATE)
          ON CONFLICT (period) DO UPDATE SET revenue = $2, date = CURRENT_DATE
          RETURNING revenue`,
         [period, cur]
       )
-      if (pushSvc) pushSvc.notifyAdmins(pushSvc.revenueRecord(rec?.revenue || 0, prev?.r || 0, new Date().toISOString().slice(0, 10), label)).catch(() => {})
     }
   }
 
   try {
-    await bump('week', (await periodTotal('week')).t, 'week')
-    await bump('month', (await periodTotal('month')).t, 'month')
+    await bump('week', (await periodTotal('week')).t)
+    await bump('month', (await periodTotal('month')).t)
+    // Every transaction republishes the running day total. CURRENT_DATE labels
+    // the same day boundary the date_trunc window uses.
+    if (pushSvc) {
+      const day = await one(
+        `SELECT COALESCE(sum(total),0) AS r, to_char(CURRENT_DATE, 'YYYY-MM-DD') AS d
+           FROM sales
+          WHERE status = 'completed' AND payment_method <> 'credit'
+            AND created_at >= date_trunc('day', now())`
+      )
+      pushSvc.notifyAdmins(pushSvc.revenueRecord(Number(day?.r || 0), day?.d)).catch(() => {})
+    }
   } catch {}
 }
 

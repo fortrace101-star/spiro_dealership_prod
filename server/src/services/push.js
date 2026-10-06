@@ -134,20 +134,23 @@ function stockWarning(product, qty, context) {
   };
 }
 
-/** Payload when revenue sets a new all-time high for a period ('week' | 'month'). */
-function revenueRecord(newRevenue, prevRevenue, date, period = 'day') {
+/** Daily revenue line for the admin inbox — published on EVERY completed
+ *  sale and credit settlement with the running day total (same window as
+ *  /reports/today revenue and the POS toast message2). Replaces the old
+ *  all-time-high-only alert; the week/month record rows still update
+ *  silently in revenue_records. */
+function revenueRecord(dayRevenue, date) {
   const fmt = (n) => Number(n || 0).toLocaleString('en-UG', { maximumFractionDigits: 0 });
-  const label = period === 'month' ? 'month' : period === 'day' ? 'day' : 'week';
+  const revenue = Number(dayRevenue || 0);
   return {
     kind: 'revenue',
     title: '📈 Revenue record',
-    body: `New all-time ${label} high: UGX ${fmt(newRevenue)} (${date}; previous UGX ${fmt(prevRevenue)})`,
+    body: `Today's revenue: UGX ${fmt(revenue)} (${date})`,
     url: '/reports',
-    tag: `revenue-record:${period}:${date}`,
-    revenue: Number(newRevenue || 0),
-    previous: Number(prevRevenue || 0),
+    tag: `revenue:${date}`,
+    revenue,
     date,
-    period,
+    period: 'day',
   };
 }
 
@@ -396,4 +399,48 @@ function stockAdjusted(actorName, product, delta, newQty, note, type) {
   };
 }
 
-module.exports = { notifyAdmins, notifyUser, saleNotification, stockWarning, revenueRecord, restockNotification, creditDecision, creditPayment, ensureConfigured, reservationCreated, releaseRequested, releaseDecision, installmentReceived, installmentSelf, creditFinalized, creditRejectionAck, permissionGranted, reorderStatus, productUpdated, stockAdjusted };
+/** POS-confirmed sale payload — one inbox row per active POS-floor user
+ *  (role NOT IN admin/manager): every terminal's bell shows it, the manager's
+ *  bell never does. Two toasts ride along (the POS renders both):
+ *    message  → "Sale #… · UGX <sale total>"
+ *    message2 → "Today's revenue: UGX <running total to-date>"
+ *  Revenue mirrors the /today window (completed, non-credit, server-day) so
+ *  it resets to 0 at UTC midnight.
+ */
+function posSaleNotification(sale, revenueToday) {
+  const fmt = (n) => Number(n || 0).toLocaleString('en-UG', { maximumFractionDigits: 0 });
+  const total = Number(sale.total || 0);
+  const revenue = Number(revenueToday || 0);
+  return {
+    kind: 'pos_sale',
+    title: '💰 Sale',
+    body: `${String(sale.receipt_no || '').slice(-6) || 'Sale'} · UGX ${fmt(total)}`,
+    url: '/pos',
+    tag: 'pos-sale-' + (sale.id || sale.client_txn_id || ''),
+    saleId: sale.id,
+    receiptNo: sale.receipt_no,
+    message: `Sale #${String(sale.receipt_no || '').slice(-6)} · UGX ${fmt(total)}`,
+    message2: `Today's revenue: UGX ${fmt(revenue >= 0 ? revenue : 0)}`,
+    revenueToday: revenue,
+  };
+}
+
+/** POS sale helper: one inbox row per POS-floor user (user_id is NOT NULL
+ *  in this schema, so the row fans out instead of sharing) + ONE SSE frame
+ *  carrying the two toast lines. Non-blocking — a POS sale never fails on
+ *  the notification path. */
+async function posSale(sale, revenueToday) {
+  try {
+    const payload = posSaleNotification(sale, revenueToday);
+    const users = await many(`SELECT id FROM users WHERE is_active AND role NOT IN ('admin','manager')`);
+    if (users.length) await persist(users.map((u) => u.id), payload);
+    // Live badge bump for open POS/Overview clients (SSE).
+    // `at` (server clock) lets the client advance its poll baseline so the
+    // 30s fallback never toasts the same sale twice.
+    emit('notification.created', { kind: payload.kind, message: payload.message, message2: payload.message2, at: new Date().toISOString() });
+  } catch (err) {
+    console.error('[push] posSale failed:', err.message);
+  }
+}
+
+module.exports = { notifyAdmins, notifyUser, saleNotification, stockWarning, revenueRecord, restockNotification, creditDecision, creditPayment, ensureConfigured, reservationCreated, releaseRequested, releaseDecision, installmentReceived, installmentSelf, creditFinalized, creditRejectionAck, permissionGranted, reorderStatus, productUpdated, stockAdjusted, posSaleNotification, posSale };
