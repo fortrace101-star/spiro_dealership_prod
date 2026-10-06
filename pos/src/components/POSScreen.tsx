@@ -7,6 +7,7 @@ import { api, clearSession, getDeviceId, getStoredUser, getToken, normalizeCateg
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner'
 import { playPushChime, usePush } from '../hooks/usePush'
 import { useEvents } from '../hooks/useEvents'
+import { usePWAInstall } from '../hooks/usePWAInstall'
 import { useSyncStatus } from '../hooks/useSyncStatus'
 import { runSyncCycle } from '../services/sync'
 import { cartTotals, useCart } from '../store/cart'
@@ -107,6 +108,9 @@ export default function POSScreen() {
     [],
   )
   const push = usePush()
+  // PWA install (restored): header ⬇ button raises Chrome's native install
+  // dialog; browsers without the prompt get platform guidance instead.
+  const pwa = usePWAInstall()
   // User-gesture unlock for the in-app chime: browsers block AudioContext
   // until the first interaction, so the first click/key arms the
   // credit-decision beep (same pattern as the admin dashboard shell).
@@ -545,6 +549,23 @@ export default function POSScreen() {
 
         <div className="ml-auto flex items-center gap-3 text-xs text-slate-400">
           <span>Today: <span className="text-white font-semibold">{todayStats.count}</span> sales · <span className="text-brand-300 font-semibold">{ugx(todayStats.revenue)}</span></span>
+          {/* PWA download: hidden once the app runs standalone. Chromium shows
+              the native install dialog; other browsers flash the manual steps. */}
+          {!pwa.installed && (
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              title="Download Spiro POS to this device — launches as its own app and keeps working offline"
+              onClick={() => {
+                void pwa.install().then((outcome) => {
+                  if (outcome === 'installed') showFlash('Installing Spiro POS', 'The app will appear on your desktop / taskbar')
+                  else if (outcome === 'guide') showFlash('How to install', pwa.guideText)
+                })
+              }}
+            >
+              ⬇ Install app
+            </button>
+          )}
           {/* Alerts subscribe automatically on load (Workstream B) — passive badge only. */}
           {push.state === 'subscribed' ? (
             <span className="flex items-center gap-1.5 text-brand-300" title="Credit decisions, releases, installments and grants arrive as notifications">

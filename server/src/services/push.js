@@ -134,20 +134,21 @@ function stockWarning(product, qty, context) {
   };
 }
 
-/** Daily revenue line for the admin inbox — published on EVERY completed
- *  sale and credit settlement with the running day total (same window as
+/** Daily running-total line for the admin inbox — published on EVERY completed
+ *  sale and credit settlement with the CUMULATIVE day revenue (same window as
  *  /reports/today revenue and the POS toast message2). Replaces the old
  *  all-time-high-only alert; the week/month record rows still update
- *  silently in revenue_records. */
+ *  silently in revenue_records. The tag is unique per publish so every
+ *  transaction raises its own OS notification instead of replacing one. */
 function revenueRecord(dayRevenue, date) {
   const fmt = (n) => Number(n || 0).toLocaleString('en-UG', { maximumFractionDigits: 0 });
   const revenue = Number(dayRevenue || 0);
   return {
     kind: 'revenue',
-    title: '📈 Revenue record',
-    body: `Today's revenue: UGX ${fmt(revenue)} (${date})`,
+    title: "📈 Today's revenue",
+    body: `Running total: UGX ${fmt(revenue)} so far today (${date})`,
     url: '/reports',
-    tag: `revenue:${date}`,
+    tag: `revenue:${date}:${Date.now()}`,
     revenue,
     date,
     period: 'day',
@@ -401,7 +402,9 @@ function stockAdjusted(actorName, product, delta, newQty, note, type) {
 
 /** POS-confirmed sale payload — one inbox row per active POS-floor user
  *  (role NOT IN admin/manager): every terminal's bell shows it, the manager's
- *  bell never does. Two toasts ride along (the POS renders both):
+ *  bell never does. Title/body are taken straight from saleNotification, so
+ *  the POS bell and OS notification read EXACTLY like the admin console's
+ *  "🛵 New Sale" line. Two toasts ride along (the POS renders both):
  *    message  → "Sale #… · UGX <sale total>"
  *    message2 → "Today's revenue: UGX <running total to-date>"
  *  Revenue mirrors the /today window (completed, non-credit, server-day) so
@@ -412,13 +415,11 @@ function posSaleNotification(sale, revenueToday) {
   const total = Number(sale.total || 0);
   const revenue = Number(revenueToday || 0);
   return {
-    kind: 'pos_sale',
-    title: '💰 Sale',
-    body: `${String(sale.receipt_no || '').slice(-6) || 'Sale'} · UGX ${fmt(total)}`,
-    url: '/pos',
+    ...saleNotification(sale), // shared copy with the admin console (title/body/receipt/…)
+    kind: 'pos_sale', // POS poll baseline filters on this kind
+    url: '/pos', // single-screen app — never deep-link to /sales
     tag: 'pos-sale-' + (sale.id || sale.client_txn_id || ''),
     saleId: sale.id,
-    receiptNo: sale.receipt_no,
     message: `Sale #${String(sale.receipt_no || '').slice(-6)} · UGX ${fmt(total)}`,
     message2: `Today's revenue: UGX ${fmt(revenue >= 0 ? revenue : 0)}`,
     revenueToday: revenue,

@@ -222,7 +222,8 @@ async function recordPayment(input, actor) {
     const status = balance <= 0.009 ? 'settled' : 'outstanding';
     await audit({ userId: actor.id, action: 'credit_payment_received', entity: 'sales', entityId: sale.id,
       newValue: { amount: amt, paid, balance, status } });
-    // Settlement revenue may set a new all-time-high day/week/month.
+    // Settlement republishes the day-cumulative revenue line and refreshes
+    // the week/month record rows (see checkRevenueRecords).
     checkRevenueRecords(pushSvc).catch(() => {});
     // Wire the previously dead creditPayment payload: the desk hears about
     // every settlement (POS and back-office paths both land here).

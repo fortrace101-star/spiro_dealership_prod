@@ -278,17 +278,27 @@ async function checkRevenueRecords(pushSvc) {
 
   // Silent bookkeeping: keep the week/month all-time-high rows fresh. The
   // admin-facing notification is the per-transaction daily figure below.
+  // NOTE: `id` defaults to 1 (legacy single-row table), so a blind INSERT for a
+  // period that has no row yet collides with the seeded row's PRIMARY KEY. That
+  // error used to kill this whole helper silently — including the revenue
+  // notification below, which is why no 'revenue' inbox row ever appeared.
+  // Update-or-insert explicitly instead: row exists → UPDATE when beaten;
+  // otherwise INSERT with a fresh id.
   const bump = async (period, total) => {
     const cur = Number(total || 0)
-    const prev = await one(`SELECT COALESCE(max(revenue),0) AS r FROM revenue_records WHERE period = $1`, [period])
-    if (cur > Number(prev?.r || 0)) {
-      await one(
-        `INSERT INTO revenue_records (period, revenue, date) VALUES ($1, $2, CURRENT_DATE)
-         ON CONFLICT (period) DO UPDATE SET revenue = $2, date = CURRENT_DATE
-         RETURNING revenue`,
-        [period, cur]
-      )
+    const row = await one(`SELECT id, revenue FROM revenue_records WHERE period = $1`, [period])
+    if (row) {
+      if (cur > Number(row.revenue || 0)) {
+        await one(`UPDATE revenue_records SET revenue = $2, date = CURRENT_DATE WHERE id = $1`, [row.id, cur])
+      }
+      return
     }
+    await one(
+      `INSERT INTO revenue_records (id, period, revenue, date)
+       SELECT COALESCE(MAX(id), 0) + 1, $1, $2, CURRENT_DATE FROM revenue_records
+       RETURNING id`,
+      [period, cur]
+    )
   }
 
   try {
