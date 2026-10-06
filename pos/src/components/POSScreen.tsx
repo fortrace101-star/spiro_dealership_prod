@@ -338,7 +338,9 @@ export default function POSScreen() {
       } else if (payload.message) {
         showFlash(payload.message, payload.message2)
       } else if (payload.title) {
-        showFlash(payload.title)
+        // Title-only pushes (e.g. "📈 Today's revenue") — show headline +
+        // body like the admin console toast, so the amount is visible.
+        showFlash(payload.title, payload.body)
       }
       // Every push lands an inbox row — recount the bell immediately.
       void api.unreadCount().then((r) => setNotifUnread(r.unread_count)).catch(() => {})

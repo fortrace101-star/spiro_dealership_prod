@@ -313,7 +313,11 @@ async function checkRevenueRecords(pushSvc) {
           WHERE status = 'completed' AND payment_method <> 'credit'
             AND created_at >= date_trunc('day', now())`
       )
-      pushSvc.notifyAdmins(pushSvc.revenueRecord(Number(day?.r || 0), day?.d)).catch(() => {})
+      const revenue = pushSvc.revenueRecord(Number(day?.r || 0), day?.d);
+      pushSvc.notifyAdmins(revenue).catch(() => {})
+      // The POS sees the same running-total notification in its bell (and as
+      // an OS push) — same payload, POS-floor audience.
+      pushSvc.notifyPosFloor(revenue).catch(() => {})
     }
   } catch {}
 }

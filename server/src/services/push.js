@@ -83,6 +83,28 @@ async function notifyAdmins(payload) {
   }
 }
 
+/** Fan a payload out to every active POS-floor user (role NOT IN
+ *  admin/manager — same audience as posSale). Used for the daily revenue
+ *  line so the "📈 Today's revenue" notification shows on the POS exactly
+ *  like it does on the admin console: durable inbox row + best-effort push. */
+async function notifyPosFloor(payload) {
+  try {
+    const users = await many(`SELECT id FROM users WHERE is_active AND role NOT IN ('admin','manager')`);
+    if (!users.length) return;
+    await persist(users.map((u) => u.id), payload);
+    if (!ensureConfigured()) return;
+    const subs = await many(
+      `SELECT s.id, s.endpoint, s.p256dh, s.auth
+         FROM push_subscriptions s
+         JOIN users u ON u.id = s.user_id
+        WHERE u.is_active AND u.role NOT IN ('admin','manager')`,
+    );
+    await sendToSubs(subs, payload);
+  } catch (err) {
+    console.error('[push] notifyPosFloor failed:', err.message);
+  }
+}
+
 /** Same funnel for a single user — POS operator alerts (credit decisions,
  *  release decisions, permission grants) + the installment self-confirm. */
 async function notifyUser(userId, payload) {
@@ -444,4 +466,4 @@ async function posSale(sale, revenueToday) {
   }
 }
 
-module.exports = { notifyAdmins, notifyUser, saleNotification, stockWarning, revenueRecord, restockNotification, creditDecision, creditPayment, ensureConfigured, reservationCreated, releaseRequested, releaseDecision, installmentReceived, installmentSelf, creditFinalized, creditRejectionAck, permissionGranted, reorderStatus, productUpdated, stockAdjusted, posSaleNotification, posSale };
+module.exports = { notifyAdmins, notifyPosFloor, notifyUser, saleNotification, stockWarning, revenueRecord, restockNotification, creditDecision, creditPayment, ensureConfigured, reservationCreated, releaseRequested, releaseDecision, installmentReceived, installmentSelf, creditFinalized, creditRejectionAck, permissionGranted, reorderStatus, productUpdated, stockAdjusted, posSaleNotification, posSale };
