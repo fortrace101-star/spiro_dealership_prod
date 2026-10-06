@@ -556,7 +556,7 @@ export default function POSScreen() {
           {!pwa.installed && (
             <button
               type="button"
-              className="btn-ghost text-xs"
+              className="btn-ghost text-xs hidden"
               title="Download Spiro POS to this device — launches as its own app and keeps working offline"
               onClick={() => {
                 void pwa.install().then((outcome) => {
@@ -567,7 +567,8 @@ export default function POSScreen() {
             >
               ⬇ Install app
             </button>
-          )}
+          )
+          }
           {/* Alerts subscribe automatically on load (Workstream B) — passive badge only. */}
           {push.state === 'subscribed' ? (
             <span className="flex items-center gap-1.5 text-brand-300" title="Credit decisions, releases, installments and grants arrive as notifications">
